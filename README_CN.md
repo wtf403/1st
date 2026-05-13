@@ -278,7 +278,6 @@ npx electron-builder --linux --arm64
 - **修复**: Claude Code 发送的 `thinking` 参数带数字 `budget_tokens` 时不再触发 `400 REQUEST_BODY_INVALID` — Kiro API 仅接受 `"adaptive"` 或 `"disabled"`，现统一映射为 `{ type: "enabled", budget_tokens: "adaptive" }`
 - **修复**: CodeWhisperer 模型 ID 解析不再把 `claude-opus-4.7` 错误映射到 Sonnet 模型 — 匹配逻辑新增模型家族互斥（opus/sonnet/haiku 不可交叉匹配）
 - **修复**: 模型匹配不再搜索 description 文本，降低新模型未在 `ListAvailableModels` 中时的误匹配
-- **变更**: AmazonQ CLI 端点 origin 更新为 `SM_AI_STUDIO_IDE`
 
 #### Claude Code 兼容性增强（基于源码分析）
 - **修复**: Thinking 参数映射为 Kiro schema 枚举格式 `{ type: "adaptive" }`（之前为 `{ type: "enabled", budget_tokens: "adaptive" }`）— 完全匹配 Kiro 后端 `["adaptive", "disabled"]` 枚举约束

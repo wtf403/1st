@@ -1067,6 +1067,32 @@ const api = {
     return ipcRenderer.invoke('registration-start-auto', config)
   },
 
+  // 启动浏览器模式注册（使用真实 Chromium，绕过 WAF 检测）
+  registrationStartBrowser: (config: {
+    useDDG?: boolean
+    ddgAuthToken?: string
+    ddgGmailEmail?: string
+    ddgGmailAppPassword?: string
+    ddgGmailAccessToken?: string
+    useTempMailPlus?: boolean
+    tempMailPlusEmail?: string
+    tempMailPlusEpin?: string
+    tempMailPlusDomain?: string
+    moEmailBaseURL?: string
+    moEmailAPIKey?: string
+    fullName?: string
+    password?: string
+    proxyUrl?: string
+    taskId?: string
+  }): Promise<{ success: boolean; result?: unknown; error?: string }> => {
+    return ipcRenderer.invoke('registration-start-browser', config)
+  },
+
+  // 取消浏览器注册
+  registrationCancelBrowser: (taskId?: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('registration-cancel-browser', taskId)
+  },
+
   // 手动模式 Phase1: 初始化 OIDC + 设备授权
   registrationManualPhase1: (config: {
     proxy?: string

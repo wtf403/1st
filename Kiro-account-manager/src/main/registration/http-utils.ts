@@ -1,9 +1,9 @@
 import crypto from 'crypto'
 
 export const DEFAULT_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0'
 export const DEFAULT_SEC_UA =
-  '"Chromium";v="137", "Not/A)Brand";v="24", "Google Chrome";v="137"'
+  '"Chromium";v="148", "Microsoft Edge";v="148", "Not/A)Brand";v="99"'
 
 /** 生成 4 位随机十六进制 */
 function hex4(): string {
@@ -33,9 +33,21 @@ export function awsccc(): string {
 
 /** 生成 ubid cookie 值 */
 export function ubidGen(): string {
+  // Format: XXX-XXXXXXX-XXXXXXX (three segments, all variable)
+  const prefixes = ['135', '146', '162', '174', '182', '195', '407', '411', '423', '434', '456', '467']
+  const prefix = prefixes[Math.floor(Math.random() * prefixes.length)]
+  const d7a = Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('')
+  const d7b = Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('')
+  return `${prefix}-${d7a}-${d7b}`
+}
+
+/** 生成 amznfbgid 值 (Amazon fraud/bot detection localStorage ID) */
+export function amznFbgId(): string {
+  const prefixes = ['X10', 'X19', 'X42', 'X55', 'X73', 'X81', 'X96', 'X97']
+  const prefix = prefixes[Math.floor(Math.random() * prefixes.length)]
   const d7 = Array.from({ length: 7 }, () => Math.floor(Math.random() * 10)).join('')
-  const d6 = Array.from({ length: 6 }, () => Math.floor(Math.random() * 10)).join('')
-  return `186-${d7}-${d6}`
+  const d10 = Array.from({ length: 10 }, () => Math.floor(Math.random() * 10)).join('')
+  return `${prefix}-${d7}:${d10}`
 }
 
 /** 生成 Kiro visitor ID */

@@ -813,6 +813,27 @@ interface KiroApi {
 
   registrationStatus: () => Promise<{ inProgress: boolean }>
 
+  // 浏览器模式注册
+  registrationStartBrowser: (config: {
+    useDDG?: boolean
+    ddgAuthToken?: string
+    ddgGmailEmail?: string
+    ddgGmailAppPassword?: string
+    ddgGmailAccessToken?: string
+    useTempMailPlus?: boolean
+    tempMailPlusEmail?: string
+    tempMailPlusEpin?: string
+    tempMailPlusDomain?: string
+    moEmailBaseURL?: string
+    moEmailAPIKey?: string
+    fullName?: string
+    password?: string
+    proxyUrl?: string
+    taskId?: string
+  }) => Promise<{ success: boolean; result?: unknown; error?: string }>
+
+  registrationCancelBrowser: (taskId?: string) => Promise<{ success: boolean }>
+
   onRegistrationLog: (callback: (msg: string) => void) => () => void
 
   onRegistrationComplete: (callback: (result: {

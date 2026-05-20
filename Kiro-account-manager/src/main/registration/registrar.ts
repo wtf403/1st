@@ -6,12 +6,13 @@ import { encryptPassword } from './jwe'
 import { refreshAppJSConfig } from './xxtea'
 import {
   DEFAULT_UA, DEFAULT_SEC_UA,
-  visitorId, awsccc, ubidGen, newUUID, gmtDate,
+  visitorId, awsccc, ubidGen, amznFbgId, newUUID, gmtDate,
   extractParam, splitAfter, saveCookies,
   getNestedMap, getNestedStringMap
 } from './http-utils'
 import {
   TempEmailService, MoEmailService, TempMailPlusService,
+  DuckDuckGoEmailService, GmailIMAPAccount,
   parseOutlookLines, getInboxCount, waitForOTP
 } from './email-service'
 import { getSystemProxy } from '../proxy/systemProxy'
@@ -88,8 +89,11 @@ export class Registrar {
   /** TLS SessionClient 选项 */
   private get sessionOpts() {
     const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || getSystemProxy() || undefined
+    // Match TLS fingerprint to Chrome 148 UA — rotate between recent Chrome identifiers
+    const tlsIds = ['chrome_120', 'chrome_124', 'chrome_131', 'chrome_133'] as const
+    const tlsClientIdentifier = tlsIds[Math.floor(Math.random() * tlsIds.length)]
     return {
-      tlsClientIdentifier: 'chrome_144' as const,
+      tlsClientIdentifier,
       timeoutSeconds: 60,
       followRedirects: true,
       insecureSkipVerify: true,
@@ -190,7 +194,7 @@ export class Registrar {
   private buildHeaders(referer: string, origin: string): Record<string, string> {
     const h: Record<string, string> = {
       'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
       'Accept-Encoding': 'gzip, deflate, br',
       'Content-Type': 'application/json',
       'User-Agent': DEFAULT_UA,
@@ -210,7 +214,7 @@ export class Registrar {
   private buildProfileHeaders(referer: string): Record<string, string> {
     const h: Record<string, string> = {
       'Accept': '*/*',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
       'Content-Type': 'application/json;charset=UTF-8',
       'User-Agent': DEFAULT_UA,
       'Origin': this.cfg.profileBase,
@@ -223,7 +227,7 @@ export class Registrar {
       'sec-fetch-site': 'same-origin',
       'priority': 'u=1, i'
     }
-    const keys = ['awsccc', 'aws-user-profile-ubid', 'i18next']
+    const keys = ['awsccc', 'aws-user-profile-ubid', 'amznfbgid', 'i18next']
     if (this.cookies.has('awsd2c-token')) keys.push('awsd2c-token', 'awsd2c-token-c')
     const parts = keys.filter((k) => this.cookies.has(k)).map((k) => `${k}=${this.cookies.get(k)}`)
     if (parts.length) h['Cookie'] = parts.join('; ')
@@ -411,6 +415,23 @@ export class Registrar {
       return
     }
 
+    if (this.cfg.useDDG) {
+      this.log('[3] 使用 DuckDuckGo Email Protection')
+      if (!this.cfg.ddgAuthToken || !this.cfg.ddgGmailEmail) {
+        throw new Error('DDG 配置不完整 (需要 authToken 和 Gmail 地址)')
+      }
+      const gmailAccount: GmailIMAPAccount = {
+        email: this.cfg.ddgGmailEmail,
+        accessToken: this.cfg.ddgGmailAccessToken,
+        appPassword: this.cfg.ddgGmailAppPassword || undefined
+      }
+      this.emailSvc = new DuckDuckGoEmailService(this.cfg.ddgAuthToken, gmailAccount)
+      this.email = await this.emailSvc.create()
+      if (!this.email) throw new Error('DDG 地址生成失败')
+      this.log(`email=${this.email}`)
+      return
+    }
+
     this.log('[3] 创建临时邮箱')
     if (!this.cfg.moEmailBaseURL) throw new Error('MoEmail 未配置')
     this.emailSvc = new MoEmailService(this.cfg.moEmailBaseURL, this.cfg.moEmailAPIKey)
@@ -422,15 +443,23 @@ export class Registrar {
   private async step4Portal(): Promise<void> {
     this.log('[4] Portal 初始化')
     this.cookies.set('awsccc', awsccc())
+    this.cookies.set('amznfbgid', amznFbgId())
     const redirect = `${this.cfg.viewBase}/start/#/device?user_code=${this.userCode}`
     const url = `${this.cfg.portalBase}/login?directory_id=view&redirect_url=${redirect}`
 
     const h: Record<string, string> = {
       'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
       'Content-Type': 'application/json',
       'Origin': this.cfg.viewBase,
       'Referer': this.cfg.viewBase + '/',
-      'User-Agent': DEFAULT_UA
+      'User-Agent': DEFAULT_UA,
+      'sec-ch-ua': DEFAULT_SEC_UA,
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Windows"',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'cross-site'
     }
     const resp = await this.doGet(url, h)
     saveCookies(this.cookies, resp.headers as Record<string, string | string[] | undefined>)
@@ -597,7 +626,9 @@ export class Registrar {
     this.log('[7.8] Profile 页面初始化')
     this.ubid = ubidGen()
     this.cookies.set('aws-user-profile-ubid', this.ubid)
-    this.cookies.set('i18next', 'zh-CN')
+    // amznfbgid is Amazon's fraud detection localStorage ID — must be present
+    if (!this.cookies.has('amznfbgid')) this.cookies.set('amznfbgid', amznFbgId())
+    // Don't set i18next — let the server set it via Set-Cookie to avoid locale mismatch
     if (!this.cookies.has('awsccc')) this.cookies.set('awsccc', awsccc())
 
     const url = `${this.cfg.profileBase}/?workflowID=${this.workflowId}`
@@ -622,7 +653,8 @@ export class Registrar {
         attributes: {
           fingerprint: fp,
           eventTimestamp: new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z'),
-          timeSpentOnPage: '38', eventType: 'PageLoad',
+          timeSpentOnPage: String(800 + Math.floor(Math.random() * 2200)),
+          eventType: 'PageLoad',
           ubid: this.ubid, visitorId: this.vid
         },
         cookies: {}
@@ -700,7 +732,8 @@ export class Registrar {
         attributes: {
           fingerprint: fp,
           eventTimestamp: new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z'),
-          timeSpentOnPage: '45000', pageName: 'EMAIL_VERIFICATION',
+          timeSpentOnPage: String(30000 + Math.floor(Math.random() * 30000)),
+          pageName: 'EMAIL_VERIFICATION',
           eventType: 'EmailVerification', ubid: this.ubid, visitorId: this.vid
         },
         cookies: {}
@@ -984,7 +1017,12 @@ export class Registrar {
     const tok = this.parseBody(resp.body)
     const access = (tok.accessToken as string) || ''
 
-    const usageUA = 'aws-sdk-js/1.0.18 ua/2.1 os/windows lang/js md/nodejs#20.16.0 api/codewhispererstreaming#1.0.18 m/E KiroIDE-0.6.18'
+    // Wait before querying usage — hitting usage API on a brand-new account immediately
+    // is a strong bot signal. A real user takes time to open the IDE first.
+    await sleep(8000 + Math.floor(Math.random() * 7000))
+
+    // Use a generic SDK UA — not a hardcoded tool identifier
+    const usageUA = 'aws-sdk-js/3.600.0 ua/2.1 os/windows#10 lang/js md/nodejs#20.16.0 api/codewhispererstreaming#3.600.0'
 
     for (const baseURL of ['https://q.us-east-1.amazonaws.com/getUsageLimits', 'https://q.eu-central-1.amazonaws.com/getUsageLimits']) {
       const usageURL = baseURL + '?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST&isEmailRequired=true'
@@ -1111,11 +1149,9 @@ export class Registrar {
         return { status: 'failed', email: this.email, error: `[SSOToken] ${(err as Error).message}` }
       }
 
-      const verify = await this.verifyAlive(awsToken)
-      if (verify.suspended) {
-        return { status: 'failed', email: this.email, error: 'suspended' }
-      }
-
+      // Do NOT call verifyAlive here — hitting getUsageLimits immediately after account
+      // creation without a real browser WAF token is the primary suspension trigger.
+      // The account refresh cycle will verify the account naturally when first used.
       return {
         status: 'success',
         email: this.email,
@@ -1125,8 +1161,7 @@ export class Registrar {
         refreshToken: (awsToken.refreshToken as string) || '',
         accessToken: (awsToken.accessToken as string) || '',
         region: 'us-east-1',
-        provider: 'BuilderId',
-        verify
+        provider: 'BuilderId'
       }
     } finally {
       await this.cleanup()
@@ -1183,11 +1218,8 @@ export class Registrar {
       await sleep(2000)
 
       const awsToken = await this.step13SSOToken()
-      const verify = await this.verifyAlive(awsToken)
-      if (verify.suspended) {
-        return { status: 'failed', email: this.email, error: 'suspended' }
-      }
 
+      // Do NOT call verifyAlive — same reason as auto mode
       return {
         status: 'success',
         email: this.email,
@@ -1197,8 +1229,7 @@ export class Registrar {
         refreshToken: (awsToken.refreshToken as string) || '',
         accessToken: (awsToken.accessToken as string) || '',
         region: 'us-east-1',
-        provider: 'BuilderId',
-        verify
+        provider: 'BuilderId'
       }
     } catch (err) {
       return { status: 'failed', email: this.email, error: (err as Error).message }

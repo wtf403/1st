@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, Button, Input, Label, Progres
 import { cn } from '@/lib/utils'
 import { appendSubscriptionLink, updateSubscriptionLink } from './SubscriptionPage'
 
-type RegMode = 'manual' | 'moemail' | 'outlook' | 'tempmail'
+type RegMode = 'manual' | 'moemail' | 'outlook' | 'tempmail' | 'ddg' | 'browser-ddg' | 'browser-tempmail'
 type Phase = 'idle' | 'initializing' | 'email' | 'otp' | 'running' | 'done'
 
 interface RegResult {
@@ -111,6 +111,10 @@ interface RegisterConfig {
   tempMailEmail: string
   tempMailEpin: string
   tempMailDomain: string
+  ddgAuthToken: string
+  ddgGmailEmail: string
+  ddgGmailAppPassword: string
+  proxyUrl: string
 }
 
 function loadConfig(): Partial<RegisterConfig> {
@@ -156,6 +160,12 @@ export function RegisterPage(): React.JSX.Element {
   const [tempMailEmail, setTempMailEmail] = useState(saved.tempMailEmail || '')
   const [tempMailEpin, setTempMailEpin] = useState(saved.tempMailEpin || '')
   const [tempMailDomain, setTempMailDomain] = useState(saved.tempMailDomain || '')
+
+  // DDG 配置
+  const [ddgAuthToken, setDdgAuthToken] = useState(saved.ddgAuthToken || '')
+  const [ddgGmailEmail, setDdgGmailEmail] = useState(saved.ddgGmailEmail || '')
+  const [ddgGmailAppPassword, setDdgGmailAppPassword] = useState(saved.ddgGmailAppPassword || '')
+  const [proxyUrl, setProxyUrl] = useState(saved.proxyUrl || '')
 
   const logContainerRef = useRef<HTMLDivElement>(null)
   const { addAccount } = useAccountsStore()
@@ -268,15 +278,25 @@ export function RegisterPage(): React.JSX.Element {
     }
   }
 
-  // ============ 自动模式 (MoEmail / Outlook) ============
+  // ============ 自动模式 (MoEmail / Outlook / Browser) ============
 
   const startAuto = async (): Promise<void> => {
     setPhase('running')
     _logs = []; setLogs([])
     setResult(null)
     setImported(false)
-    const modeLabel = mode === 'moemail' ? 'MoEmail' : mode === 'tempmail' ? 'TempMail.Plus' : 'Outlook'
+    const modeLabel = mode === 'moemail' ? 'MoEmail' : mode === 'tempmail' ? 'TempMail.Plus' : mode === 'ddg' ? 'DDG + Gmail' : mode === 'browser-ddg' ? 'Browser (DDG)' : mode === 'browser-tempmail' ? 'Browser (TempMail)' : 'Outlook'
     addLog(t('register.logAutoStart').replace('{mode}', modeLabel))
+
+    if (isBrowserMode) {
+      const config = buildBrowserConfig()
+      const res = await window.api.registrationStartBrowser(config)
+      if (!res.success) {
+        addLog(`${t('register.logStartFailed')} ${res.error}`)
+        setPhase('idle')
+      }
+      return
+    }
 
     const config: Record<string, unknown> = {}
     if (mode === 'moemail') {
@@ -290,6 +310,11 @@ export function RegisterPage(): React.JSX.Element {
       config.tempMailPlusEmail = tempMailEmail
       config.tempMailPlusEpin = tempMailEpin
       config.tempMailPlusDomain = tempMailDomain
+    } else if (mode === 'ddg') {
+      config.useDDG = true
+      config.ddgAuthToken = ddgAuthToken
+      config.ddgGmailEmail = ddgGmailEmail
+      config.ddgGmailAppPassword = ddgGmailAppPassword
     }
 
     const res = await window.api.registrationStartAuto(config as Parameters<typeof window.api.registrationStartAuto>[0])
@@ -428,8 +453,8 @@ export function RegisterPage(): React.JSX.Element {
 
   // 自动保存配置到 localStorage
   useEffect(() => {
-    saveConfig({ mode, moBaseURL, moAPIKey, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, tempMailEmail, tempMailEpin, tempMailDomain })
-  }, [mode, moBaseURL, moAPIKey, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, tempMailEmail, tempMailEpin, tempMailDomain])
+    saveConfig({ mode, moBaseURL, moAPIKey, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, tempMailEmail, tempMailEpin, tempMailDomain, ddgAuthToken, ddgGmailEmail, ddgGmailAppPassword, proxyUrl })
+  }, [mode, moBaseURL, moAPIKey, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, tempMailEmail, tempMailEpin, tempMailDomain, ddgAuthToken, ddgGmailEmail, ddgGmailAppPassword, proxyUrl])
 
   // ============ 注册历史 ============
 
@@ -478,35 +503,32 @@ export function RegisterPage(): React.JSX.Element {
   const autoImportResult = useCallback(async (regResult: RegResult): Promise<boolean> => {
     if (!regResult.refreshToken || !regResult.clientId || !regResult.clientSecret) return false
     try {
-      const verifyResult = await window.api.verifyAccountCredentials({
-        refreshToken: regResult.refreshToken,
-        clientId: regResult.clientId,
-        clientSecret: regResult.clientSecret,
-        region: regResult.region || 'us-east-1',
-        authMethod: 'IdC',
-        provider: 'BuilderId'
-      })
       const now = Date.now()
       const defaultUsage = { current: 0, limit: 0, percentUsed: 0, lastUpdated: now }
-
-      if (verifyResult.success && verifyResult.data) {
-        const expiresAt = verifyResult.data.expiresIn ? now + verifyResult.data.expiresIn * 1000 : now + 3600000
-        const usage = verifyResult.data.usage
-          ? { ...verifyResult.data.usage, percentUsed: verifyResult.data.usage.limit > 0 ? Math.round((verifyResult.data.usage.current / verifyResult.data.usage.limit) * 100) : 0, lastUpdated: now }
-          : defaultUsage
-        addAccount({
-          email: verifyResult.data.email || regResult.email, password: regResult.password, idp: 'BuilderId', status: 'active',
-          credentials: { refreshToken: regResult.refreshToken, clientId: regResult.clientId, clientSecret: regResult.clientSecret, accessToken: verifyResult.data.accessToken || regResult.accessToken || '', csrfToken: '', region: regResult.region || 'us-east-1', authMethod: 'IdC' as const, provider: 'BuilderId' as const, expiresAt },
-          subscription: { type: (verifyResult.data.subscriptionType as 'Free' | 'Pro' | 'Pro_Plus' | 'Enterprise' | 'Teams') || 'Free', title: verifyResult.data.subscriptionTitle || 'Free Tier' },
-          usage, tags: [], lastUsedAt: now
-        })
-      } else {
-        addAccount({
-          email: regResult.email, password: regResult.password, idp: 'BuilderId', status: 'active',
-          credentials: { refreshToken: regResult.refreshToken, clientId: regResult.clientId, clientSecret: regResult.clientSecret, accessToken: regResult.accessToken || '', csrfToken: '', region: regResult.region || 'us-east-1', authMethod: 'IdC' as const, provider: 'BuilderId' as const, expiresAt: now + 3600000 },
-          subscription: { type: 'Free', title: 'Free Tier' }, usage: defaultUsage, tags: [], lastUsedAt: now
-        })
-      }
+      // Do NOT call verifyAccountCredentials here — hitting GetUsageLimits immediately
+      // after registration (without a real browser WAF token) triggers account suspension.
+      // Import directly with the tokens we already have from registration.
+      addAccount({
+        email: regResult.email,
+        password: regResult.password,
+        idp: 'BuilderId',
+        status: 'active',
+        credentials: {
+          refreshToken: regResult.refreshToken,
+          clientId: regResult.clientId,
+          clientSecret: regResult.clientSecret,
+          accessToken: regResult.accessToken || '',
+          csrfToken: '',
+          region: regResult.region || 'us-east-1',
+          authMethod: 'IdC' as const,
+          provider: 'BuilderId' as const,
+          expiresAt: now + 3600000
+        },
+        subscription: { type: 'Free', title: 'Free Tier' },
+        usage: defaultUsage,
+        tags: [],
+        lastUsedAt: now
+      })
       return true
     } catch {
       return false
@@ -593,12 +615,37 @@ export function RegisterPage(): React.JSX.Element {
       config.tempMailPlusEmail = tempMailEmail
       config.tempMailPlusEpin = tempMailEpin
       config.tempMailPlusDomain = tempMailDomain
+    } else if (mode === 'ddg') {
+      config.useDDG = true
+      config.ddgAuthToken = ddgAuthToken
+      config.ddgGmailEmail = ddgGmailEmail
+      config.ddgGmailAppPassword = ddgGmailAppPassword
     } else {
       config.useOutlook = true
       config.outlookData = outlookData
     }
     return config as Parameters<typeof window.api.registrationStartAuto>[0]
-  }, [mode, moBaseURL, moAPIKey, outlookData, tempMailEmail, tempMailEpin, tempMailDomain])
+  }, [mode, moBaseURL, moAPIKey, outlookData, tempMailEmail, tempMailEpin, tempMailDomain, ddgAuthToken, ddgGmailEmail, ddgGmailAppPassword])
+
+  // 构建浏览器模式配置
+  const buildBrowserConfig = useCallback((): Parameters<typeof window.api.registrationStartBrowser>[0] => {
+    const config: Parameters<typeof window.api.registrationStartBrowser>[0] = {}
+    if (mode === 'browser-ddg') {
+      config.useDDG = true
+      config.ddgAuthToken = ddgAuthToken
+      config.ddgGmailEmail = ddgGmailEmail
+      config.ddgGmailAppPassword = ddgGmailAppPassword
+    } else if (mode === 'browser-tempmail') {
+      config.useTempMailPlus = true
+      config.tempMailPlusEmail = tempMailEmail
+      config.tempMailPlusEpin = tempMailEpin
+      config.tempMailPlusDomain = tempMailDomain
+    }
+    if (proxyUrl.trim()) config.proxyUrl = proxyUrl.trim()
+    return config
+  }, [mode, ddgAuthToken, ddgGmailEmail, ddgGmailAppPassword, tempMailEmail, tempMailEpin, tempMailDomain, proxyUrl])
+
+  const isBrowserMode = mode === 'browser-ddg' || mode === 'browser-tempmail'
 
   // 执行单次注册（含重试）
   const runSingleWithRetry = useCallback(async (
@@ -622,7 +669,11 @@ export function RegisterPage(): React.JSX.Element {
         ))
       }
 
-      const res = await window.api.registrationStartAuto({ ...config, taskId } as typeof config)
+      const isBrowser = isBrowserMode
+      const res = isBrowser
+        ? await window.api.registrationStartBrowser({ ...(config as Parameters<typeof window.api.registrationStartBrowser>[0]), taskId })
+        : await window.api.registrationStartAuto({ ...config, taskId } as typeof config)
+
       if (res.success && res.result) {
         const regResult = res.result as RegResult
         if (regResult.status === 'success') {
@@ -636,7 +687,7 @@ export function RegisterPage(): React.JSX.Element {
       }
     }
     return { success: false }
-  }, [addLog, t])
+  }, [addLog, t, isBrowserMode])
 
   // 处理单个批量注册任务完成
   const handleBatchOutcome = async (
@@ -703,7 +754,7 @@ export function RegisterPage(): React.JSX.Element {
     }))
     setBatchItems(items)
 
-    const config = buildAutoConfig()
+    const config = isBrowserMode ? buildBrowserConfig() : buildAutoConfig()
     const concurrency = Math.max(1, batchConcurrency)
 
     setPhase('running')
@@ -829,7 +880,12 @@ export function RegisterPage(): React.JSX.Element {
               ['manual', t('register.manual')],
               ['moemail', 'MoEmail'],
               ['outlook', 'Outlook'],
-              ['tempmail', t('register.tempmail')]
+              ['tempmail', t('register.tempmail')],
+              ['ddg', 'DDG + Gmail'],
+              ...(import.meta.env.DEV ? [
+                ['browser-ddg', isEn ? 'Browser (DDG)' : '浏览器 (DDG)'],
+                ['browser-tempmail', isEn ? 'Browser (TempMail)' : '浏览器 (TempMail)']
+              ] as [RegMode, string][] : [])
             ] as [RegMode, string][]).map(([m, label]) => (
               <button
                 key={m}
@@ -950,6 +1006,68 @@ export function RegisterPage(): React.JSX.Element {
               <p className="text-xs text-muted-foreground">{t('register.tempMailDesc')}</p>
             </div>
           )}
+
+          {/* DuckDuckGo Email Protection + Gmail IMAP 配置 */}
+          {mode === 'ddg' && (
+            <div className="p-4 bg-muted/30 rounded-lg border border-dashed space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>{isEn ? 'DDG Auth Token' : 'DDG 授权 Token'}</Label>
+                  <Input
+                    type="password"
+                    value={ddgAuthToken}
+                    onChange={(e) => setDdgAuthToken(e.target.value)}
+                    placeholder={isEn ? 'Bearer token from DDG account' : 'DDG 账号 Bearer token'}
+                    disabled={isRunning || batchRunning}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>{isEn ? 'Gmail Address' : 'Gmail 地址'}</Label>
+                  <Input
+                    value={ddgGmailEmail}
+                    onChange={(e) => setDdgGmailEmail(e.target.value)}
+                    placeholder="you@gmail.com"
+                    disabled={isRunning || batchRunning}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>{isEn ? 'Gmail App Password' : 'Gmail 应用专用密码'}</Label>
+                <Input
+                  type="password"
+                  value={ddgGmailAppPassword}
+                  onChange={(e) => setDdgGmailAppPassword(e.target.value)}
+                  placeholder={isEn ? '16-char app password (Settings → Security → App passwords)' : '16位应用专用密码（设置 → 安全 → 应用专用密码）'}
+                  disabled={isRunning || batchRunning}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {isEn
+                  ? 'DDG generates a @duck.com alias and forwards mail to your Gmail. Gmail IMAP polls for the OTP.'
+                  : 'DDG 生成 @duck.com 别名并转发邮件到 Gmail，通过 Gmail IMAP 轮询获取验证码。'}
+              </p>
+            </div>
+          )}
+
+          {/* Browser Mode Proxy Config (dev only) */}
+          {isBrowserMode && (
+            <div className="p-4 bg-muted/30 rounded-lg border border-dashed space-y-4">
+              <div className="space-y-1.5">
+                <Label>{isEn ? 'Proxy URL (Optional)' : '代理 URL（可选）'}</Label>
+                <Input
+                  value={proxyUrl}
+                  onChange={(e) => setProxyUrl(e.target.value)}
+                  placeholder={isEn ? 'http://user:pass@host:port or socks5://host:port' : 'http://user:pass@host:port 或 socks5://host:port'}
+                  disabled={isRunning || batchRunning}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {isEn
+                  ? 'Browser mode uses real Chromium to bypass AWS WAF bot detection. Proxy is optional.'
+                  : '浏览器模式使用真实 Chromium 绕过 AWS WAF 机器人检测。代理为可选项。'}
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -1038,7 +1156,10 @@ export function RegisterPage(): React.JSX.Element {
                 disabled={
                   (mode === 'moemail' && !moBaseURL) ||
                   (mode === 'outlook' && !outlookData.trim()) ||
-                  (mode === 'tempmail' && (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim()))
+                  (mode === 'tempmail' && (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim())) ||
+                  (mode === 'ddg' && (!ddgAuthToken.trim() || !ddgGmailEmail.trim() || !ddgGmailAppPassword.trim())) ||
+                  (mode === 'browser-ddg' && (!ddgAuthToken.trim() || !ddgGmailEmail.trim() || !ddgGmailAppPassword.trim())) ||
+                  (mode === 'browser-tempmail' && (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim()))
                 }
               >
                 <Play className="h-4 w-4 mr-2" />
@@ -1131,7 +1252,10 @@ export function RegisterPage(): React.JSX.Element {
                   (!batchRunning && isRunning) ||
                   (mode === 'moemail' && !moBaseURL) ||
                   (mode === 'outlook' && !outlookData.trim()) ||
-                  (mode === 'tempmail' && (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim()))
+                  (mode === 'tempmail' && (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim())) ||
+                  (mode === 'ddg' && (!ddgAuthToken.trim() || !ddgGmailEmail.trim() || !ddgGmailAppPassword.trim())) ||
+                  (mode === 'browser-ddg' && (!ddgAuthToken.trim() || !ddgGmailEmail.trim() || !ddgGmailAppPassword.trim())) ||
+                  (mode === 'browser-tempmail' && (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim()))
                 }
               >
                 {batchRunning ? <><Square className="h-4 w-4 mr-2" />{t('register.batchStop')}</> : <><Play className="h-4 w-4 mr-2" />{t('register.batchStart')}</>}

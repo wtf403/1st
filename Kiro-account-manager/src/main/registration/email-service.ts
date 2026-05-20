@@ -542,3 +542,391 @@ export async function waitForOTP(
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
+
+// ============ DDG Email Protection ============
+
+export interface GmailIMAPAccount {
+  email: string
+  accessToken: string  // OAuth2 access token with IMAP scope
+  appPassword?: string // alternative: Gmail app password
+}
+
+export class DuckDuckGoEmailService implements TempEmailService {
+  private static readonly QUACK_URL = 'https://quack.duckduckgo.com/api'
+  private readonly authToken: string  // Bearer token from DDG account
+  private readonly gmailAccount: GmailIMAPAccount
+  private address = ''
+  //private generatedUsername = ''
+
+  constructor(authToken: string, gmailAccount: GmailIMAPAccount) {
+    this.authToken = authToken
+    this.gmailAccount = gmailAccount
+  }
+
+  async create(): Promise<string> {
+    const resp = await proxyFetch(`${DuckDuckGoEmailService.QUACK_URL}/email/addresses`, {
+      method: 'POST',
+      headers: {
+        'accept': '*/*',
+        'accept-language': 'en-US,en;q=0.9',
+        'authorization': `Bearer ${this.authToken}`,
+        'sec-ch-ua': '"Chromium";v="148", "Microsoft Edge";v="148", "Not/A)Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0',
+        'referrer': 'https://duckduckgo.com/'
+      }
+    })
+    if (!resp.ok) {
+      throw new Error(`DDG address creation failed: ${resp.status}`)
+    }
+    const data = (await resp.json()) as Record<string, unknown>
+    const username = data.address as string
+    if (!username) throw new Error('No address returned from DDG API')
+    //this.generatedUsername = username
+    this.address = `${username}@duck.com`
+    console.log(`[DDG] Generated address: ${this.address}`)
+    return this.address
+  }
+
+  getAddress(): string {
+    return this.address
+  }
+
+  async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
+    if (!this.address) throw new Error('Address not created yet')
+    // DDG forwards to Gmail — poll Gmail IMAP for the forwarded mail
+    const service = new GmailIMAPService(this.gmailAccount, this.address)
+    return service.waitForCode(timeoutSec, intervalSec)
+  }
+}
+
+// ============ Gmail IMAP (reads DDG-forwarded mail) ============
+
+class GmailIMAPService {
+  private readonly account: GmailIMAPAccount
+  private readonly filterForAddress: string  // the duck.com address to match
+
+  constructor(account: GmailIMAPAccount, filterForAddress: string) {
+    this.account = account
+    this.filterForAddress = filterForAddress
+  }
+
+  async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
+    const maxRetries = Math.floor(timeoutSec / intervalSec)
+    const checkedUids = new Set<string>()
+
+    let beforeCount = 0
+    try {
+      beforeCount = await this.getMessageCount()
+      console.log(`[Gmail IMAP] Messages before: ${beforeCount}`)
+    } catch (err) {
+      console.log(`[Gmail IMAP] getMessageCount failed (will use 0): ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      await sleep(intervalSec * 1000)
+      let client: GmailIMAPClient | null = null
+      try {
+        client = new GmailIMAPClient()
+        await client.connect()
+        if (this.account.appPassword) {
+          await client.authenticatePlain(this.account.email, this.account.appPassword)
+        } else {
+          await client.authenticateXOAuth2(this.account.email, this.account.accessToken)
+        }
+        await client.selectInbox()
+
+        // Search for emails from AWS signin sender received after we started
+        const uids = await client.searchFrom('no-reply@signin.aws', beforeCount)
+        console.log(`[Gmail IMAP] [${attempt}/${maxRetries}] AWS sender UIDs: [${uids.join(',')}]`)
+
+        // Only check the NEWEST email (highest UID) — skip stale ones from previous runs
+        if (uids.length === 0) continue
+        const newestUid = uids[uids.length - 1]
+        if (checkedUids.has(newestUid)) continue
+        checkedUids.add(newestUid)
+
+        const body = await client.fetchBodyByUID(newestUid)
+        if (!body) continue
+
+        const code = extractCode(body)
+        if (code) {
+          console.log(`[Gmail IMAP] Got OTP: ${code} from UID ${newestUid}`)
+          await client.markSeen(newestUid)
+          return code
+        } else {
+          console.log(`[Gmail IMAP] UID ${newestUid} from AWS but no 6-digit code found, body length: ${body.length}`)
+        }
+      } catch (err) {
+        console.log(`[Gmail IMAP] [${attempt}/${maxRetries}] Error: ${err instanceof Error ? err.message : String(err)}`)
+      } finally {
+        client?.close()
+      }
+    }
+    throw new Error(`OTP wait timed out (${timeoutSec}s)`)
+  }
+
+  private async getMessageCount(): Promise<number> {
+    const client = new GmailIMAPClient()
+    try {
+      await client.connect()
+      if (this.account.appPassword) {
+        await client.authenticatePlain(this.account.email, this.account.appPassword)
+      } else {
+        await client.authenticateXOAuth2(this.account.email, this.account.accessToken)
+      }
+      return await client.selectInbox()
+    } finally {
+      client.close()
+    }
+  }
+}
+
+// ============ MIME body decoder ============
+
+function decodeMimeBody(raw: string): string {
+  const result: string[] = []
+
+  // Split into MIME parts by boundary
+  // Find all Content-Transfer-Encoding headers and decode their content
+  const lines = raw.split(/\r?\n/)
+  let encoding = ''
+  let collectingContent = false
+  const contentLines: string[] = []
+
+  const flushContent = (): void => {
+    if (contentLines.length === 0) return
+    const content = contentLines.join('\n')
+    const enc = encoding.toLowerCase().trim()
+    if (enc === 'base64') {
+      try {
+        const decoded = Buffer.from(content.replace(/\s/g, ''), 'base64').toString('utf-8')
+        result.push(decoded)
+      } catch { /* ignore bad base64 */ }
+    } else if (enc === 'quoted-printable') {
+      result.push(decodeQuotedPrintable(content))
+    } else {
+      result.push(content)
+    }
+    contentLines.length = 0
+    encoding = ''
+  }
+
+  for (const line of lines) {
+    const lower = line.toLowerCase()
+
+    // Detect MIME boundary (starts with --)
+    if (line.startsWith('--')) {
+      flushContent()
+      collectingContent = false
+      continue
+    }
+
+    // Detect Content-Transfer-Encoding header
+    if (lower.startsWith('content-transfer-encoding:')) {
+      flushContent()
+      encoding = line.slice('content-transfer-encoding:'.length).trim()
+      collectingContent = false
+      continue
+    }
+
+    // Blank line after headers = start of content
+    if (!collectingContent && line.trim() === '') {
+      collectingContent = true
+      continue
+    }
+
+    if (collectingContent) {
+      contentLines.push(line)
+    }
+  }
+
+  flushContent()
+
+  // Join all decoded parts; if nothing decoded, return raw
+  const joined = result.join('\n')
+  return joined.length > 0 ? joined : raw
+}
+
+function decodeQuotedPrintable(input: string): string {
+  return input
+    .replace(/=\r?\n/g, '')  // soft line breaks
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+}
+
+// ============ Gmail IMAP client ============
+
+class GmailIMAPClient {
+  private socket: tls.TLSSocket | null = null
+  private buffer = ''
+  private tagCounter = 0
+
+  async connect(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = tls.connect(993, 'imap.gmail.com', { servername: 'imap.gmail.com' })
+      const timer = setTimeout(() => { socket.destroy(); reject(new Error('Connect timeout')) }, 15000)
+      socket.once('error', (err) => { clearTimeout(timer); reject(err) })
+      socket.once('secureConnect', () => {
+        clearTimeout(timer)
+        this.socket = socket
+        this.readLine().then(() => resolve()).catch(reject)
+      })
+    })
+  }
+
+  async authenticatePlain(email: string, appPassword: string): Promise<void> {
+    // Gmail app passwords are formatted as "xxxx xxxx xxxx xxxx" — strip spaces
+    const password = appPassword.replace(/\s/g, '')
+    const escaped = password.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const tag = await this.sendCommand(`LOGIN "${email}" "${escaped}"`)
+    const { result } = await this.readUntilTag(tag)
+    if (!result.includes('OK')) throw new Error(`Gmail LOGIN failed: ${result}`)
+    console.log('[Gmail IMAP] Authenticated (plain)')
+  }
+
+  async authenticateXOAuth2(email: string, accessToken: string): Promise<void> {
+    const auth = `user=${email}\x01auth=Bearer ${accessToken}\x01\x01`
+    const b64 = Buffer.from(auth).toString('base64')
+    const tag = await this.sendCommand(`AUTHENTICATE XOAUTH2 ${b64}`)
+    const { result } = await this.readUntilTag(tag)
+    if (!result.includes('OK')) throw new Error(`Gmail XOAUTH2 failed: ${result}`)
+    console.log('[Gmail IMAP] Authenticated (OAuth2)')
+  }
+
+  async selectInbox(): Promise<number> {
+    const tag = await this.sendCommand('SELECT INBOX')
+    const { lines, result } = await this.readUntilTag(tag)
+    if (!result.includes('OK')) throw new Error(`SELECT INBOX failed: ${result}`)
+    for (const line of lines) {
+      const m = line.match(/\*\s+(\d+)\s+EXISTS/)
+      if (m) return parseInt(m[1], 10)
+    }
+    return 0
+  }
+
+  // Search by sender, optionally restricted to messages after a sequence number floor
+  async searchFrom(sender: string, afterSeq: number): Promise<string[]> {
+    // UID SEARCH FROM "sender" <seq>:* — finds messages from sender with seq >= afterSeq+1
+    const seqFloor = afterSeq + 1
+    const tag = await this.sendCommand(`UID SEARCH ${seqFloor}:* FROM "${sender}"`)
+    const { lines, result } = await this.readUntilTag(tag)
+    if (!result.includes('OK')) return []
+    for (const line of lines) {
+      if (line.startsWith('* SEARCH')) {
+        return line.split(' ').slice(2).filter(Boolean)
+      }
+    }
+    return []
+  }
+
+  // Get UIDs of messages by sequence number range
+  async fetchUidsBySeqRange(from: number, to: number): Promise<string[]> {
+    // FETCH by sequence range to get UIDs
+    const tag = await this.sendCommand(`FETCH ${from}:${to} (UID)`)
+    const { lines, result } = await this.readUntilTag(tag)
+    if (!result.includes('OK')) return []
+    const uids: string[] = []
+    for (const line of lines) {
+      // e.g. "* 4756 FETCH (UID 98765432)"
+      const m = line.match(/\*\s+\d+\s+FETCH\s+\(UID\s+(\d+)\)/i)
+      if (m) uids.push(m[1])
+    }
+    return uids
+  }
+
+  async fetchBodyByUID(uid: string): Promise<string> {
+    // Fetch full RFC822 message to get all MIME parts
+    const tag = await this.sendCommand(`UID FETCH ${uid} (BODY.PEEK[])`)
+    const { lines, result } = await this.readUntilTag(tag)
+    if (!result.includes('OK')) return ''
+
+    // Collect raw lines between the FETCH response line and closing ')'
+    let inBody = false
+    const bodyLines: string[] = []
+    for (const line of lines) {
+      if (!inBody) {
+        if (line.includes('FETCH') && line.includes('BODY')) {
+          inBody = true
+        }
+        continue
+      }
+      if (line === ')') break
+      bodyLines.push(line)
+    }
+
+    const raw = bodyLines.join('\r\n')
+    return decodeMimeBody(raw)
+  }
+
+  async markSeen(uid: string): Promise<void> {
+    const tag = await this.sendCommand(`UID STORE ${uid} +FLAGS (\\Seen)`)
+    await this.readUntilTag(tag)
+  }
+
+  close(): void {
+    if (this.socket) {
+      try { this.socket.write('A999 LOGOUT\r\n') } catch { /* ignore */ }
+      this.socket.destroy()
+      this.socket = null
+    }
+  }
+
+  private nextTag(): string {
+    return `T${String(++this.tagCounter).padStart(3, '0')}`
+  }
+
+  private async sendCommand(cmd: string): Promise<string> {
+    if (!this.socket) throw new Error('Not connected')
+    const tag = this.nextTag()
+    this.socket.write(`${tag} ${cmd}\r\n`)
+    return tag
+  }
+
+  private readLine(): Promise<string> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) return reject(new Error('Not connected'))
+
+      // Check buffer first before attaching listeners
+      const idx = this.buffer.indexOf('\r\n')
+      if (idx >= 0) {
+        const line = this.buffer.slice(0, idx)
+        this.buffer = this.buffer.slice(idx + 2)
+        return resolve(line)
+      }
+
+      const onData = (chunk: Buffer): void => {
+        this.buffer += chunk.toString()
+        const i = this.buffer.indexOf('\r\n')
+        if (i >= 0) {
+          this.socket!.removeListener('data', onData)
+          this.socket!.removeListener('error', onError)
+          const line = this.buffer.slice(0, i)
+          this.buffer = this.buffer.slice(i + 2)
+          resolve(line)
+        }
+      }
+
+      const onError = (err: Error): void => {
+        this.socket!.removeListener('data', onData)
+        this.socket!.removeListener('error', onError)
+        reject(err)
+      }
+
+      this.socket.on('data', onData)
+      this.socket.once('error', onError)
+    })
+  }
+
+  private async readUntilTag(tag: string): Promise<{ lines: string[]; result: string }> {
+    const lines: string[] = []
+    while (true) {
+      const line = await this.readLine()
+      if (line.startsWith(`${tag} `)) return { lines, result: line }
+      lines.push(line)
+    }
+  }
+}

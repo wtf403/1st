@@ -1,8 +1,11 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { Registrar, newConfig, type RegistrationConfig } from './index'
+import { BrowserRegistrar, type BrowserRegistrationConfig } from './browser-registrar'
 
 // 注册池：支持多个并发注册任务
 const registrarPool = new Map<string, Registrar>()
+// 浏览器注册池
+const browserRegistrarPool = new Map<string, BrowserRegistrar>()
 // 手动模式使用固定 key
 const MANUAL_KEY = '__manual__'
 
@@ -113,6 +116,57 @@ export function registerIPCHandlers(getMainWindow: () => BrowserWindow | null): 
 
   // 获取注册状态
   ipcMain.handle('registration-status', async () => {
-    return { inProgress: registrarPool.size > 0, count: registrarPool.size }
+    return { inProgress: registrarPool.size > 0 || browserRegistrarPool.size > 0, count: registrarPool.size + browserRegistrarPool.size }
+  })
+
+  // ============ 浏览器模式注册 ============
+
+  ipcMain.handle('registration-start-browser', async (_event, config: BrowserRegistrationConfig) => {
+    const taskId = config.taskId || `browser-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    const logPrefix = config.taskId ? `[#${config.taskId.slice(0, 12)}] ` : ''
+
+    const registrar = new BrowserRegistrar(
+      { ...config, taskId },
+      (msg) => sendLog(`${logPrefix}${msg}`, config.taskId)
+    )
+    browserRegistrarPool.set(taskId, registrar)
+
+    try {
+      const result = await registrar.run()
+      browserRegistrarPool.delete(taskId)
+
+      if (!config.taskId) {
+        const win = getMainWindow()
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('registration-complete', result)
+        }
+      }
+      return { success: true, result }
+    } catch (err) {
+      browserRegistrarPool.delete(taskId)
+      const errMsg = err instanceof Error ? err.message : String(err)
+      return { success: false, error: errMsg }
+    } finally {
+      await registrar.destroy()
+    }
+  })
+
+  // 取消浏览器注册
+  ipcMain.handle('registration-cancel-browser', async (_event, taskId?: string) => {
+    if (taskId) {
+      const registrar = browserRegistrarPool.get(taskId)
+      if (registrar) {
+        registrar.abort()
+        await registrar.destroy()
+        browserRegistrarPool.delete(taskId)
+      }
+    } else {
+      for (const [id, registrar] of browserRegistrarPool.entries()) {
+        registrar.abort()
+        await registrar.destroy()
+        browserRegistrarPool.delete(id)
+      }
+    }
+    return { success: true }
   })
 }

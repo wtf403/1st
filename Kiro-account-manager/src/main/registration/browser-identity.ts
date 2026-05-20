@@ -191,8 +191,8 @@ export function randomIdentity(): BrowserIdentity {
   const plugins = shuffle([...PLUGINS_POOL])
 
   return {
-    chromeVer: '137.0.0.0',
-    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+    chromeVer: '148.0.0.0',
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0',
     gpuVendor: gpu.vendor,
     gpuModel: gpu.model,
     webGLExts: exts,

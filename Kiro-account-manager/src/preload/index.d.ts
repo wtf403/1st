@@ -843,29 +843,26 @@ interface KiroApi {
 
   registrationStatus: () => Promise<{ inProgress: boolean }>
 
-  // 代理池验活
-  proxyPoolValidate: (params: {
-    url: string
-    testUrl?: string
-    timeoutMs?: number
-  }) => Promise<{ success: boolean; latencyMs?: number; externalIp?: string; error?: string }>
-
-  // 诊断：通用 HTTP 探测
-  diagnoseHttpProbe: (params: { url: string; method?: 'GET' | 'HEAD'; timeoutMs?: number }) => Promise<{
-    success: boolean
-    latencyMs?: number
-    status?: number
-    error?: string
-  }>
-
-  // 账号-代理绑定（反代分桶）
-  accountSetProxyBinding: (accountId: string, proxyUrl: string | undefined) => Promise<{ success: boolean }>
-
-  // 一键诊断
-  diagnoseRun: (params: {
+  // 浏览器模式注册
+  registrationStartBrowser: (config: {
+    useDDG?: boolean
+    ddgAuthToken?: string
+    ddgGmailEmail?: string
+    ddgGmailAppPassword?: string
+    ddgGmailAccessToken?: string
+    useTempMailPlus?: boolean
+    tempMailPlusEmail?: string
+    tempMailPlusEpin?: string
+    tempMailPlusDomain?: string
+    moEmailBaseURL?: string
+    moEmailAPIKey?: string
+    fullName?: string
+    password?: string
     proxyUrl?: string
-    targets: Array<{ id: string; label: string; url: string; timeoutMs?: number; expectStatus?: number[] }>
-  }) => Promise<{ results: Array<{ id: string; label: string; url: string; success: boolean; httpStatus?: number; latencyMs?: number; error?: string }> }>
+    taskId?: string
+  }) => Promise<{ success: boolean; result?: unknown; error?: string }>
+
+  registrationCancelBrowser: (taskId?: string) => Promise<{ success: boolean }>
 
   onRegistrationLog: (callback: (msg: string) => void) => () => void
 

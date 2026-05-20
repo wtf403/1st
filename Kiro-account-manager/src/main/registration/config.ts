@@ -31,6 +31,13 @@ export interface RegistrationConfig {
   tempMailPlusEpin: string
   tempMailPlusDomain: string // 自建域名
 
+  // DuckDuckGo Email Protection + Gmail IMAP
+  useDDG: boolean
+  ddgAuthToken: string       // DDG account Bearer token
+  ddgGmailEmail: string      // Gmail address that receives DDG-forwarded mail
+  ddgGmailAppPassword: string // Gmail app password (preferred over OAuth2)
+  ddgGmailAccessToken: string // Gmail OAuth2 access token (alternative)
+
   // 手动模式
   manualMode: boolean
 }
@@ -75,6 +82,11 @@ export function newConfig(overrides?: Partial<RegistrationConfig>): Registration
     tempMailPlusEmail: '',
     tempMailPlusEpin: '',
     tempMailPlusDomain: '',
+    useDDG: false,
+    ddgAuthToken: '',
+    ddgGmailEmail: '',
+    ddgGmailAppPassword: '',
+    ddgGmailAccessToken: '',
     manualMode: false,
     ...overrides
   }

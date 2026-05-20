@@ -269,19 +269,19 @@ export function buildFingerprintData(
     case 'profile':
       dynamicURLs = [`/dist/main/app_${identity.webpackHash}.min.js`]
       scriptsElapsed = 0
-      historyLength = (eventType === 'PageLoad' || eventType === 'first_load') ? 2 : 3
+      historyLength = 2 + randInt(4)
       isCompatible = true
       break
     case 'signup':
       dynamicURLs = ['/assets/js/app.js']
       scriptsElapsed = 1
-      historyLength = 5
+      historyLength = 3 + randInt(5)
       isCompatible = true
       break
     default:
       dynamicURLs = ['/assets/js/app.js']
       scriptsElapsed = 1
-      historyLength = 1
+      historyLength = 1 + randInt(3)
       isCompatible = false
   }
 
@@ -314,6 +314,11 @@ export function buildFingerprintData(
   const screenStr = formatScreen(identity.screen)
 
   const result = new OrderedMap()
+  // US timezones: Eastern(-5/-4), Central(-6/-5), Mountain(-7/-6), Pacific(-8/-7)
+  // Pick a random US offset (negative = west of UTC, stored as negative minutes / 60)
+  const US_TZ_OFFSETS = [-5, -6, -7, -8]
+  const tzOffset = US_TZ_OFFSETS[randInt(US_TZ_OFFSETS.length)]
+
   result.set('metrics', metrics)
   result.set('start', startTime)
   result.set('interaction', interaction)
@@ -329,7 +334,7 @@ export function buildFingerprintData(
     phantom: { properties: { window: [] } }
   })
   result.set('end', endMs)
-  result.set('timeZone', 8)
+  result.set('timeZone', tzOffset)
   result.set('flashVersion', null)
   result.set('plugins', pluginsStr + ' ||' + screenStr)
   result.set('dupedPlugins', pluginsStr + ' ||' + screenStr)

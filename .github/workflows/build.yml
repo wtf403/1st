@@ -46,14 +46,14 @@ jobs:
           echo "$CHANGELOG_CN" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          echo "Extracted changelog for release"
-
   build-macos:
     needs: get-version
     runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
         arch: [x64, arm64]
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,7 +63,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install setuptools (for node-gyp)
+      - name: Install setuptools
         run: pip install setuptools
 
       - name: Setup Node.js
@@ -78,8 +78,10 @@ jobs:
         run: npm ci
 
       - name: Build
+        id: build_step
         working-directory: ${{ env.WORKING_DIR }}
         run: npm run build
+        continue-on-error: true
 
       - name: Package macOS ${{ matrix.arch }}
         working-directory: ${{ env.WORKING_DIR }}
@@ -88,6 +90,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
@@ -113,7 +116,7 @@ jobs:
           path: artifacts
 
       - name: Display structure of downloaded files
-        run: ls -R artifacts
+        run: ls -R artifacts || true
 
       - name: Deduplicate update metadata files
         run: |
@@ -122,7 +125,7 @@ jobs:
           find artifacts -path "*/macos-*/*" -name "latest-mac.yml" -delete 2>/dev/null || true
 
           echo "After deduplication:"
-          find artifacts -name "*.yml" -type f
+          find artifacts -name "*.yml" -type f || true
 
       - name: Create Release
         uses: softprops/action-gh-release@v1

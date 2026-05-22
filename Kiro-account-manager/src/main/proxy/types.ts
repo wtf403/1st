@@ -389,6 +389,7 @@ export interface ProxyAccount {
   requestCount?: number
   errorCount?: number
   isAvailable?: boolean
+  suspended?: boolean  // 账户是否被封禁/冻结
   cooldownUntil?: number
   // 配额追踪
   quotaUsed?: number

@@ -1,0 +1,73 @@
+[    3834ms] [LOG] document is ready, browser is MacIntel 64-bit: false @ http://localhost:14600/js/Utilities.js:41
+[    3834ms] [LOG] mouse set_touchaction() touchaction= none label= zoom @ http://localhost:14600/js/Utilities.js:41
+[    3835ms] [LOG] debug enabled for: [] @ http://localhost:14600/js/Utilities.js:41
+[    4215ms] [LOG] sound enabled, audio codec string: null @ http://localhost:14600/js/Utilities.js:41
+[    4215ms] [LOG] connection_progress( Initializing ,   ,  20 ) @ http://localhost:14600/js/Utilities.js:41
+[    4216ms] [LOG] audio codec MediaSource 'aac+mpeg4' / 'audio/mp4; codecs="mp4a.40.2"' is blacklisted for Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 @ http://localhost:14600/js/Utilities.js:24
+[    4216ms] [LOG] audio codec MediaSource OK  'mp3' / 'audio/mpeg' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource NOK: 'mp3+mpeg4' / 'audio/mp4; codecs="mp3"' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource NOK: 'ogg' / 'audio/ogg' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource NOK: 'wav' / 'audio/wav' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource NOK: 'flac' / 'audio/flac' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource 'opus+mka' / 'audio/webm; codecs="opus"' is blacklisted for Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource OK  'vorbis+mka' / 'audio/webm; codecs="vorbis"' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource NOK: 'vorbis+ogg' / 'audio/ogg; codecs="vorbis"' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource NOK: 'speex+ogg' / 'audio/ogg; codecs="speex"' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource NOK: 'flac+ogg' / 'audio/ogg; codecs="flac"' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec MediaSource NOK: 'opus+ogg' / 'audio/ogg; codecs="opus"' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] getMediaSourceAudioCodecs( false )= [] @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec aurora OK  'wav' / 'lpcm' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec aurora NOK 'mp3+id3v2' / 'mp3' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec aurora NOK 'flac' / 'flac' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] audio codec aurora NOK 'aac+mpeg4' / 'mp4a' @ http://localhost:14600/js/Utilities.js:24
+[    4217ms] [LOG] using mediasource audio codec: vorbis+mka @ http://localhost:14600/js/Utilities.js:41
+[    4217ms] [LOG] audio codecs:  [mp3, vorbis+mka, wav] @ http://localhost:14600/js/Utilities.js:41
+[    4218ms] [LOG] connection_progress( Connecting to server ,  localhost:14600/ ,  40 ) @ http://localhost:14600/js/Utilities.js:41
+[    4218ms] [LOG] we have webworker support @ http://localhost:14600/js/Utilities.js:41
+[    4787ms] [LOG] we can use websocket in webworker @ http://localhost:14600/js/Utilities.js:41
+[    4787ms] [LOG] connection_progress( Opening WebSocket connection ,  ws://localhost:14600/ ,  60 ) @ http://localhost:14600/js/Utilities.js:41
+[    8873ms] [LOG] connection_progress( WebSocket connection established ,   ,  80 ) @ http://localhost:14600/js/Utilities.js:41
+[    8873ms] [LOG] sending hello @ http://localhost:14600/js/Utilities.js:41
+[    8874ms] [LOG] using new navigator.clipboard @ http://localhost:14600/js/Utilities.js:41
+[    8874ms] [LOG] return all encodings:  [jpeg, png, rgb, rgb32, webp] @ http://localhost:14600/js/Utilities.js:41
+[    8874ms] [LOG] return all encodings:  [jpeg, png, rgb, rgb32, webp] @ http://localhost:14600/js/Utilities.js:41
+[    8874ms] [LOG] hello capabilities {version: 3.1.4, platform: Mac OSX, platform.name: Mac OSX, platform.processor: unknown, platform.platform: 5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKi…KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36} @ http://localhost:14600/js/Utilities.js:41
+[    9742ms] [LOG] got hello: server version 3.1.5 accepted our connection @ http://localhost:14600/js/Utilities.js:41
+[    9742ms] [ERROR] server does not support speaker forwarding @ http://localhost:14600/js/Utilities.js:35
+[    9742ms] [LOG] received xdg start menu data @ http://localhost:14600/js/Utilities.js:41
+[    9742ms] [LOG] server screen sizes: [Array(2), Array(2)] @ http://localhost:14600/js/Utilities.js:41
+[    9742ms] [LOG] connection status - change event= undefined , connection info= {effective-type: 4g, downlink: 1500000, rtt: 100} tell server: 1 @ http://localhost:14600/js/Utilities.js:41
+[    9743ms] [LOG] connection_progress( Session started ,   ,  100 ) @ http://localhost:14600/js/Utilities.js:41
+[    9743ms] [LOG] received xdg start menu data @ http://localhost:14600/js/Utilities.js:41
+[    9862ms] [LOG] tray 2 position: 146 1 @ http://localhost:14600/js/Utilities.js:41
+[    9917ms] [LOG] startup complete @ http://localhost:14600/js/Utilities.js:41
+[    9917ms] [LOG] connection-established @ http://localhost:14600/js/Utilities.js:41
+[   14882ms] [LOG] server connection is OK @ http://localhost:14600/js/Utilities.js:41
+[   57854ms] [LOG] connection-lost @ http://localhost:14600/js/Utilities.js:41
+[   57860ms] [LOG] audio: stopping stream @ http://localhost:14600/js/Utilities.js:41
+[   57860ms] [LOG] close_audio_mediasource: audio_source_buffer=undefined, media_source=undefined, audio=null @ http://localhost:14600/js/Utilities.js:41
+[   57861ms] [LOG] audio-state: stopped @ http://localhost:14600/js/Utilities.js:41
+[   57861ms] [LOG] closing:  new client
+the new client does not wish to share @ http://localhost:14600/js/Utilities.js:41
+[   57863ms] [LOG] closing:  new client
+the new client does not wish to share @ http://localhost:14600/js/Utilities.js:41
+[   58419ms] [LOG] visibilitychange hidden= true connected= false @ http://localhost:14600/js/Utilities.js:41
+[   59475ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://localhost:14600/connect.html:0
+[   59481ms] [LOG] audio codec MediaSource 'aac+mpeg4' / 'audio/mp4; codecs="mp4a.40.2"' is blacklisted for Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource OK  'mp3' / 'audio/mpeg' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource NOK: 'mp3+mpeg4' / 'audio/mp4; codecs="mp3"' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource NOK: 'ogg' / 'audio/ogg' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource NOK: 'wav' / 'audio/wav' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource NOK: 'flac' / 'audio/flac' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource 'opus+mka' / 'audio/webm; codecs="opus"' is blacklisted for Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource OK  'vorbis+mka' / 'audio/webm; codecs="vorbis"' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource NOK: 'vorbis+ogg' / 'audio/ogg; codecs="vorbis"' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource NOK: 'speex+ogg' / 'audio/ogg; codecs="speex"' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource NOK: 'flac+ogg' / 'audio/ogg; codecs="flac"' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] audio codec MediaSource NOK: 'opus+ogg' / 'audio/ogg; codecs="opus"' @ http://localhost:14600/js/Utilities.js:24
+[   59481ms] [LOG] getMediaSourceAudioCodecs( false )= [] @ http://localhost:14600/js/Utilities.js:24
+[   59482ms] [LOG] audio codec aurora OK  'wav' / 'lpcm' @ http://localhost:14600/js/Utilities.js:24
+[   59482ms] [LOG] audio codec aurora NOK 'mp3+id3v2' / 'mp3' @ http://localhost:14600/js/Utilities.js:24
+[   59482ms] [LOG] audio codec aurora NOK 'flac' / 'flac' @ http://localhost:14600/js/Utilities.js:24
+[   59482ms] [LOG] audio codec aurora NOK 'aac+mpeg4' / 'mp4a' @ http://localhost:14600/js/Utilities.js:24
+[   59482ms] [LOG] stream codecs= [mp3] codec= mp3 @ http://localhost:14600/js/MediaSourceUtil.js:284

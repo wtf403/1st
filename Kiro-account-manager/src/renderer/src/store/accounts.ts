@@ -1486,8 +1486,34 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         // 检查是否是封禁错误
         const isBanned = (result.error as { isBanned?: boolean })?.isBanned
         if (isBanned) {
-          // 封禁账户：设置错误状态并标记为封禁
-          updateAccountStatus(id, 'error', `账户已封禁: ${result.error?.message}`)
+          // 封禁账户：设置错误状态、禁用并标记为封禁
+          set((state) => {
+            const accounts = new Map(state.accounts)
+            const acc = accounts.get(id)
+            if (acc) {
+              accounts.set(id, {
+                ...acc,
+                status: 'error',
+                isActive: false,
+                lastError: `账户已封禁: ${result.error?.message}`,
+                lastCheckedAt: Date.now()
+              })
+            }
+            return { accounts }
+          })
+          get().saveToStorage()
+          // 如果是当前激活账号，自动切换到其他可用账号
+          const bannedAccount = get().accounts.get(id)
+          if (bannedAccount?.isActive) {
+            const available = Array.from(get().accounts.values()).find(
+              a => a.id !== id && !isBannedAccountError(a.lastError)
+            )
+            if (available) {
+              get().setActiveAccount(available.id)
+            } else {
+              get().setActiveAccount(null)
+            }
+          }
         } else {
           updateAccountStatus(id, 'error', result.error?.message)
         }
@@ -2427,6 +2453,30 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
       return { accounts }
     })
+
+    // 如果被封禁，禁用账号
+    const bannedAccount = get().accounts.get(id)
+    if (bannedAccount && isBannedAccountError(bannedAccount.lastError)) {
+      set((state) => {
+        const accounts = new Map(state.accounts)
+        const acc = accounts.get(id)
+        if (acc) {
+          accounts.set(id, { ...acc, isActive: false })
+        }
+        return { accounts }
+      })
+      // 如果是当前激活账号，自动切换
+      if (bannedAccount.isActive) {
+        const available = Array.from(get().accounts.values()).find(
+          a => a.id !== id && !isBannedAccountError(a.lastError)
+        )
+        if (available) {
+          get().setActiveAccount(available.id)
+        } else {
+          get().setActiveAccount(null)
+        }
+      }
+    }
   },
 
   // 处理后台检查结果（兼容入口；高频场景请走 applyBackgroundCheckResults 批量）
@@ -2536,6 +2586,30 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
       return { accounts }
     })
+
+    // 如果被封禁，禁用账号
+    const bannedAccount = get().accounts.get(id)
+    if (bannedAccount && isBannedAccountError(bannedAccount.lastError)) {
+      set((state) => {
+        const accounts = new Map(state.accounts)
+        const acc = accounts.get(id)
+        if (acc) {
+          accounts.set(id, { ...acc, isActive: false })
+        }
+        return { accounts }
+      })
+      // 如果是当前激活账号，自动切换
+      if (bannedAccount.isActive) {
+        const available = Array.from(get().accounts.values()).find(
+          a => a.id !== id && !isBannedAccountError(a.lastError)
+        )
+        if (available) {
+          get().setActiveAccount(available.id)
+        } else {
+          get().setActiveAccount(null)
+        }
+      }
+    }
   },
 
   // ==================== 定时自动保存 ====================

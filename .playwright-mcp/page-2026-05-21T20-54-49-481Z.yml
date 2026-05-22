@@ -1,0 +1,20 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - paragraph [ref=e4]: Connecting to server
+    - paragraph [ref=e5]: localhost:14600/
+    - progressbar [ref=e6]
+  - list [ref=e9]:
+    - listitem [ref=e10]:
+      - link "menu" [ref=e11] [cursor=pointer]:
+        - /url: "#"
+      - text: apps kitchen access_time cloud_upload exit_to_app info info trending_up bug_report exit_to_app
+    - listitem [ref=e12]:
+      - link "filter" [ref=e13] [cursor=pointer]:
+        - /url: "#"
+    - listitem [ref=e14]:
+      - link "fullscreen" [ref=e15] [cursor=pointer]:
+        - /url: "#"
+    - listitem [ref=e16]:
+      - link "volume_off" [ref=e17] [cursor=pointer]:
+        - /url: "#"
+  - textbox [ref=e18]

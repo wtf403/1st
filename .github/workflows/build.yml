@@ -101,8 +101,65 @@ jobs:
             ${{ env.WORKING_DIR }}/dist/*.blockmap
           if-no-files-found: ignore
 
+  build-linux:
+    needs: get-version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install setuptools
+        run: pip install setuptools
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ env.WORKING_DIR }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ env.WORKING_DIR }}
+        run: npm ci
+
+      - name: Build
+        id: build_step
+        working-directory: ${{ env.WORKING_DIR }}
+        run: npm run build
+        continue-on-error: true
+
+      - name: Package Linux ${{ matrix.arch }}
+        working-directory: ${{ env.WORKING_DIR }}
+        run: npx electron-builder --linux --${{ matrix.arch }} -p never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            ${{ env.WORKING_DIR }}/dist/*.AppImage
+            ${{ env.WORKING_DIR }}/dist/*.deb
+            ${{ env.WORKING_DIR }}/dist/*.rpm
+            ${{ env.WORKING_DIR }}/dist/*.tar.gz
+            ${{ env.WORKING_DIR }}/dist/*.yml
+            ${{ env.WORKING_DIR }}/dist/*.blockmap
+          if-no-files-found: ignore
+
   release:
-    needs: [get-version, build-macos]
+    needs: [get-version, build-macos, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -123,6 +180,8 @@ jobs:
           find artifacts -name "builder-debug.yml" -delete 2>/dev/null || true
           find artifacts -name "latest-mac.yml" | head -1 | xargs -I {} cp {} artifacts/latest-mac.yml 2>/dev/null || true
           find artifacts -path "*/macos-*/*" -name "latest-mac.yml" -delete 2>/dev/null || true
+          find artifacts -name "latest-linux.yml" | head -1 | xargs -I {} cp {} artifacts/latest-linux.yml 2>/dev/null || true
+          find artifacts -path "*/linux-*/*" -name "latest-linux.yml" -delete 2>/dev/null || true
 
           echo "After deduplication:"
           find artifacts -name "*.yml" -type f || true
@@ -146,7 +205,12 @@ jobs:
           files: |
             artifacts/**/*.dmg
             artifacts/**/*.zip
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.tar.gz
             artifacts/**/*.yml
             artifacts/**/*.blockmap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

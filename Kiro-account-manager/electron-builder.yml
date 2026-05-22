@@ -53,7 +53,6 @@ dmg:
 linux:
   target:
     - AppImage
-    - snap
     - deb
   executableName: kiro-account-manager
   maintainer: electronjs.org

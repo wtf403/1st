@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'crypto'
 import { createServer } from 'http'
 import { BrowserWindow, session } from 'electron'
-import { is } from '@electron-toolkit/utils'
+
 import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici'
 import { getSystemProxy } from '../proxy/systemProxy'
 import {
@@ -313,7 +313,7 @@ export class BrowserRegistrar {
     const win = new BrowserWindow({
       width: 1024,
       height: 768,
-      show: is.dev,
+      show: true,
       title: 'Kiro Registration',
       webPreferences: {
         session: ses,
@@ -334,7 +334,6 @@ export class BrowserRegistrar {
       )
     })
 
-    if (!is.dev) win.setSkipTaskbar(true)
     this.win = win
     return win
   }
@@ -1073,7 +1072,7 @@ export class BrowserRegistrar {
       const msg = err instanceof Error ? err.message : String(err)
       console.log(`[BrowserRegistrar] Error: ${msg}`)
       this.log(`[Browser] Error: ${msg}`)
-      if (is.dev && this.win && !this.win.isDestroyed()) {
+      if (this.win && !this.win.isDestroyed()) {
         const url = this.win.webContents.getURL()
         console.log(`[BrowserRegistrar] Failed at: ${url}`)
         this.log(`[Browser] Failed at: ${url}`)

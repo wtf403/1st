@@ -579,6 +579,7 @@ export interface ProxyStats {
   failedRequests: number
   totalTokens: number
   totalCredits: number // 累计总 credits（所有请求）
+  totalCost: number // Estimated dollar usage from token counts and model pricing
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number

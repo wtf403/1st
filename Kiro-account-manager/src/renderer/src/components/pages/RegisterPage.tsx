@@ -1877,12 +1877,8 @@ export function RegisterPage(): React.JSX.Element {
                 ['outlook', 'Outlook'],
                 ['tempmail', t('register.tempmail')],
                 ['ddg', 'DDG + Gmail'],
-                ...(import.meta.env.DEV
-                  ? ([
-                      ['browser-ddg', isEn ? 'Browser (DDG)' : '浏览器 (DDG)'],
-                      ['browser-tempmail', isEn ? 'Browser (TempMail)' : '浏览器 (TempMail)']
-                    ] as [RegMode, string][])
-                  : [])
+                ['browser-ddg', isEn ? 'Browser (DDG)' : '浏览器 (DDG)'],
+                ['browser-tempmail', isEn ? 'Browser (TempMail)' : '浏览器 (TempMail)']
               ] as [RegMode, string][]
             ).map(([m, label]) => (
               <button
@@ -1976,78 +1972,8 @@ export function RegisterPage(): React.JSX.Element {
             </div>
           )}
 
-          {/* 混合模式配置：勾选要参与轮询的子源 + 权重 */}
-          {mode === 'mixed' && (
-            <div className="p-4 bg-muted/30 rounded-lg border border-dashed space-y-3">
-              <Label>{isEn ? 'Enabled email sources (Weighted Round-Robin)' : '启用的邮箱源（加权轮询）'}</Label>
-              <div className="space-y-2">
-                {(['outlook', 'tempmail'] as AutoEmailSource[]).map((src) => {
-                  const enabled = mixedEnabledSources.includes(src)
-                  const label = src === 'outlook' ? 'Outlook' : 'TempMail.Plus'
-                  const configured = src === 'outlook' ? !!outlookData.trim()
-                    : !!(tempMailDomain.trim() && tempMailEmail.trim() && tempMailEpin.trim())
-                  return (
-                    <div key={src} className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          setMixedEnabledSources((prev) =>
-                            enabled ? prev.filter((s) => s !== src) : [...prev, src]
-                          )
-                        }}
-                        disabled={isRunning || batchRunning}
-                        className={cn(
-                          'flex-1 px-3 py-2 rounded-md border text-sm transition-colors flex items-center gap-2',
-                          enabled
-                            ? 'border-primary bg-primary/10 text-primary font-medium'
-                            : 'border-border hover:border-primary/50',
-                          !configured && 'opacity-60'
-                        )}
-                        title={!configured ? '该源尚未配置，会被跳过' : ''}
-                      >
-                        {enabled
-                          ? <CheckCircle2 className="h-4 w-4" />
-                          : <Square className="h-4 w-4" />
-                        }
-                        {label}
-                        {!configured && <span className="text-[10px] text-amber-500 ml-auto">未配置</span>}
-                      </button>
-                      {enabled && configured && (
-                        <div className="flex items-center gap-1 text-xs">
-                          <span className="text-muted-foreground">权重:</span>
-                          <Input
-                            type="number" min={0} max={100}
-                            value={mixedWeights[src] || 0}
-                            onChange={(e) => {
-                              const v = parseInt(e.target.value, 10)
-                              if (!isNaN(v) && v >= 0) {
-                                setMixedWeights((prev) => ({ ...prev, [src]: v }))
-                              }
-                            }}
-                            disabled={isRunning || batchRunning}
-                            className="h-8 w-16 text-xs text-center"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {isEn
-                  ? 'Smooth Weighted Round-Robin: e.g. moemail=4 + tempmail=1 means 80% / 20%. Set 0 to disable.'
-                  : '平滑加权轮询：例如 moemail=4 + tempmail=1 表示 80% / 20%。权重为 0 等于不参与。'
-                }
-              </p>
-              {mixedEnabledSources.length === 0 && (
-                <p className="text-xs text-amber-500">
-                  {isEn ? 'Please enable at least one source.' : '请至少启用一个源'}
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* TempMail.Plus 配置（独立模式 或 混合模式启用了 tempmail 时显示） */}
-          {(mode === 'tempmail' || (mode === 'mixed' && mixedEnabledSources.includes('tempmail'))) && (
+          {/* TempMail.Plus 自建域名配置 */}
+          {(mode === 'tempmail' || mode === 'browser-tempmail') && (
             <div className="p-4 bg-muted/30 rounded-lg border border-dashed space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-1.5">
@@ -2083,7 +2009,7 @@ export function RegisterPage(): React.JSX.Element {
           )}
 
           {/* DuckDuckGo Email Protection + Gmail IMAP 配置 */}
-          {mode === 'ddg' && (
+          {(mode === 'ddg' || mode === 'browser-ddg') && (
             <div className="p-4 bg-muted/30 rounded-lg border border-dashed space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
@@ -2128,7 +2054,7 @@ export function RegisterPage(): React.JSX.Element {
             </div>
           )}
 
-          {/* Browser Mode Proxy Config (dev only) */}
+          {/* Browser Mode Proxy Config */}
           {isBrowserMode && (
             <div className="p-4 bg-muted/30 rounded-lg border border-dashed space-y-4">
               <div className="space-y-1.5">

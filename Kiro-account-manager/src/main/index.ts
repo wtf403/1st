@@ -380,8 +380,24 @@ async function importRegisteredAccount(result: {
 
 async function maybeReplaceSuspendedAccount(reason: string): Promise<void> {
   if (autoReplacementRunning) return
-  const config = store?.get('registrationAutoReplacement') as AutoReplacementConfig | undefined
-  if (!config?.enabled) return
+  const savedConfig = store?.get('registrationAutoReplacement') as AutoReplacementConfig | undefined
+  if (!savedConfig?.enabled) return
+
+  // Suspended-account replacement must always use the Browser (DDG) flow.
+  // If the user last used Browser (TempMail), force DDG here and fail loudly if DDG is not configured.
+  const config: AutoReplacementConfig = {
+    ...savedConfig,
+    useDDG: true,
+    useTempMailPlus: false
+  }
+  if (!config.ddgAuthToken || !config.ddgGmailEmail) {
+    mainWindow?.webContents.send('registration-log', {
+      message:
+        '[AutoReplace] Browser (DDG) replacement is enabled but DDG Auth Token / Gmail Email is not configured.'
+    })
+    return
+  }
+
   autoReplacementRunning = true
   try {
     const browserConfig: BrowserRegistrationConfig = { ...config, taskId: `replace-${Date.now()}` }

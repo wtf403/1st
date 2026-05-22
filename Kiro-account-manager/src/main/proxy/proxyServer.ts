@@ -165,6 +165,38 @@ function modelCapabilityMap(modalities: ModelModality[]): Record<ModelModality, 
   }
 }
 
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  'claude-sonnet-4.5': { input: 3, output: 15 },
+  'claude-sonnet-4': { input: 3, output: 15 },
+  'claude-haiku-4.5': { input: 1, output: 5 },
+  'deepseek-3.2': { input: 0.252, output: 0.378 },
+  'minimax-m2.5': { input: 0.15, output: 1.15 },
+  'minimax-m2.1': { input: 0.3, output: 1.2 },
+  'glm-5': { input: 0.6, output: 1.92 },
+  'qwen3-coder-next': { input: 0.11, output: 0.8 },
+  'claude-3.7-sonnet': { input: 3, output: 15 }
+}
+
+function normalizeModelIdForPricing(model?: string): string {
+  return (model || '')
+    .toLowerCase()
+    .replace(/^anthropic\./, '')
+    .replace(/-v\d+:\d+$/, '')
+    .replace(/_/g, '-')
+}
+
+function calculateTokenCost(
+  model: string | undefined,
+  inputTokens: number,
+  outputTokens: number
+): number {
+  const normalized = normalizeModelIdForPricing(model)
+  const pricingKey = Object.keys(MODEL_PRICING).find((key) => normalized.includes(key))
+  if (!pricingKey) return 0
+  const pricing = MODEL_PRICING[pricingKey]
+  return (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output
+}
+
 function extractThinkingEfforts(schema?: Record<string, unknown> | null): string[] | undefined {
   if (!schema) return undefined
   const props = schema.properties as Record<string, unknown> | undefined
@@ -371,6 +403,7 @@ export class ProxyServer {
       failedRequests: 0,
       totalTokens: 0,
       totalCredits: 0,
+      totalCost: 0,
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -880,6 +913,13 @@ export class ProxyServer {
       failedRequests: this.stats.failedRequests,
       totalTokens: this.stats.totalTokens,
       totalCredits: this.stats.totalCredits,
+      // Existing installs may have restored token totals from storage before totalCost existed.
+      // If no per-request cost has been accumulated yet, fall back to Sonnet pricing so the
+      // dashboard never shows $0.00 for non-zero tokens. New requests still use their actual model.
+      totalCost: Math.max(
+        this.stats.totalCost,
+        calculateTokenCost('claude-sonnet-4.5', this.stats.inputTokens, this.stats.outputTokens)
+      ),
       inputTokens: this.stats.inputTokens,
       outputTokens: this.stats.outputTokens,
       cacheReadTokens: this.stats.cacheReadTokens,
@@ -914,6 +954,12 @@ export class ProxyServer {
     this.stats.inputTokens = inputTokens
     this.stats.outputTokens = outputTokens
     this.stats.totalTokens = inputTokens + outputTokens
+    // Backfill cost for persisted token totals from versions before totalCost existed.
+    // Historical per-model data is unavailable, so use Sonnet pricing as the safest default.
+    this.stats.totalCost = Math.max(
+      this.stats.totalCost,
+      calculateTokenCost('claude-sonnet-4.5', inputTokens, outputTokens)
+    )
   }
 
   // 重置累计 tokens
@@ -921,6 +967,12 @@ export class ProxyServer {
     this.stats.inputTokens = 0
     this.stats.outputTokens = 0
     this.stats.totalTokens = 0
+    this.stats.totalCost = 0
+    this.stats.cacheReadTokens = 0
+    this.stats.cacheWriteTokens = 0
+    this.stats.reasoningTokens = 0
+    this.stats.recentRequests = []
+    this.events.onTokensUpdate?.(0, 0)
   }
 
   // 设置请求统计（用于从持久化存储恢复）
@@ -4552,6 +4604,19 @@ export class ProxyServer {
     return lines.join('\n') + '\n'
   }
 
+  private recordModelUsage(
+    model: string | undefined,
+    inputTokens: number,
+    outputTokens: number
+  ): void {
+    const key = model || 'unknown'
+    const existing = this.stats.modelStats.get(key) || { model: key, requests: 0, tokens: 0 }
+    existing.requests++
+    existing.tokens += inputTokens + outputTokens
+    this.stats.modelStats.set(key, existing)
+    this.stats.totalCost += calculateTokenCost(model, inputTokens, outputTokens)
+  }
+
   // 记录请求到 recentRequests
   private recordRequest(log: {
     path: string
@@ -4564,6 +4629,7 @@ export class ProxyServer {
     success: boolean
     error?: string
   }): void {
+    this.recordModelUsage(log.model, log.inputTokens || 0, log.outputTokens || 0)
     this.stats.recentRequests.push({
       timestamp: Date.now(),
       path: log.path,

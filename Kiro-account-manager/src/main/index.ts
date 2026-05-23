@@ -318,9 +318,15 @@ interface AutoReplacementConfig extends BrowserRegistrationConfig {
   generateProxyEachTime?: boolean
   proxyCdpAddress?: string
   proxyFormUrl?: string
+  scheduledEnabled?: boolean
+  scheduledIntervalMin?: number
+  scheduledStartTime?: string
+  scheduledEndTime?: string
+  scheduledMethod?: 'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
 }
 
 let autoReplacementRunning = false
+let scheduledRegistrationTimer: ReturnType<typeof setTimeout> | null = null
 
 async function importRegisteredAccount(result: {
   email: string
@@ -378,22 +384,54 @@ async function importRegisteredAccount(result: {
   mainWindow?.webContents.send('accounts-data-updated', accountData)
 }
 
-async function maybeReplaceSuspendedAccount(reason: string): Promise<void> {
+async function runBrowserReplacementRegistration(
+  reason: string,
+  requireEnabled = true
+): Promise<void> {
   if (autoReplacementRunning) return
   const savedConfig = store?.get('registrationAutoReplacement') as AutoReplacementConfig | undefined
-  if (!savedConfig?.enabled) return
+  if (requireEnabled && !savedConfig?.enabled) return
+  if (!savedConfig) return
 
-  // Suspended-account replacement must always use the Browser (DDG) flow.
-  // If the user last used Browser (TempMail), force DDG here and fail loudly if DDG is not configured.
+  const method = savedConfig.scheduledMethod || 'browser-ddg'
+  const isScheduled = reason.toLowerCase().includes('scheduled')
+
+  // Suspended-account replacement keeps the safest default: Browser (DDG).
+  // Scheduled account creation can use the selected browser creation method.
   const config: AutoReplacementConfig = {
     ...savedConfig,
-    useDDG: true,
-    useTempMailPlus: false
+    useDDG: isScheduled ? method === 'browser-ddg' : true,
+    useTempMailPlus: isScheduled ? method === 'browser-tempmail' : false
   }
-  if (!config.ddgAuthToken || !config.ddgGmailEmail) {
+
+  if (isScheduled && method === 'browser-moemail') {
+    config.useDDG = false
+    config.useTempMailPlus = false
+  }
+
+  if (config.useDDG && (!config.ddgAuthToken || !config.ddgGmailEmail)) {
     mainWindow?.webContents.send('registration-log', {
       message:
-        '[AutoReplace] Browser (DDG) replacement is enabled but DDG Auth Token / Gmail Email is not configured.'
+        '[AutoRegister] Browser (DDG) is selected but DDG Auth Token / Gmail Email is not configured.'
+    })
+    return
+  }
+
+  if (
+    config.useTempMailPlus &&
+    (!config.tempMailPlusEmail || !config.tempMailPlusEpin || !config.tempMailPlusDomain)
+  ) {
+    mainWindow?.webContents.send('registration-log', {
+      message:
+        '[AutoRegister] Browser (TempMail.Plus) is selected but TempMail.Plus is not configured.'
+    })
+    return
+  }
+
+  if (isScheduled && method === 'browser-moemail' && !config.moEmailBaseURL) {
+    mainWindow?.webContents.send('registration-log', {
+      message:
+        '[AutoRegister] Browser (MoEmail) is selected but MoEmail Base URL is not configured.'
     })
     return
   }
@@ -402,13 +440,21 @@ async function maybeReplaceSuspendedAccount(reason: string): Promise<void> {
   try {
     const browserConfig: BrowserRegistrationConfig = { ...config, taskId: `replace-${Date.now()}` }
     if (config.generateProxyEachTime) {
-      browserConfig.proxyUrl = await generateColabProxy({
-        cdpAddress: config.proxyCdpAddress || '127.0.0.1:9229',
-        formUrl: config.proxyFormUrl
-      })
+      try {
+        browserConfig.proxyUrl = await generateColabProxy({
+          cdpAddress: config.proxyCdpAddress || '127.0.0.1:9229',
+          formUrl: config.proxyFormUrl
+        })
+      } catch (error) {
+        mainWindow?.webContents.send('registration-log', {
+          message: `[AutoReplace] Proxy generation failed, continuing without proxy: ${error instanceof Error ? error.message : String(error)}`,
+          taskId: browserConfig.taskId
+        })
+        browserConfig.proxyUrl = undefined
+      }
     }
     mainWindow?.webContents.send('registration-log', {
-      message: `[AutoReplace] Suspended account invalidated; registering replacement. ${reason}`,
+      message: `[AutoReplace] Registering replacement/new scheduled account. ${reason}`,
       taskId: browserConfig.taskId
     })
     const registrar = new BrowserRegistrar(browserConfig, (msg) => {
@@ -433,6 +479,85 @@ async function maybeReplaceSuspendedAccount(reason: string): Promise<void> {
   } finally {
     autoReplacementRunning = false
   }
+}
+
+async function maybeReplaceSuspendedAccount(reason: string): Promise<void> {
+  return runBrowserReplacementRegistration(reason, true)
+}
+
+function clearScheduledRegistrationTimer(): void {
+  if (scheduledRegistrationTimer) {
+    clearTimeout(scheduledRegistrationTimer)
+    scheduledRegistrationTimer = null
+  }
+}
+
+function parseScheduledTime(value?: string): number | null {
+  if (!value) return null
+  const match = value.match(/^(\d{1,2}):(\d{2})$/)
+  if (!match) return null
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null
+  return hours * 60 + minutes
+}
+
+function isWithinScheduledTimePeriod(cfg: AutoReplacementConfig): boolean {
+  const start = parseScheduledTime(cfg.scheduledStartTime)
+  const end = parseScheduledTime(cfg.scheduledEndTime)
+  if (start === null || end === null || start === end) return true
+
+  const now = new Date()
+  const current = now.getHours() * 60 + now.getMinutes()
+
+  // Same-day window, e.g. 09:00 -> 18:00.
+  if (start < end) return current >= start && current < end
+
+  // Overnight window, e.g. 22:00 -> 06:00.
+  return current >= start || current < end
+}
+
+function getScheduledPeriodLabel(cfg: AutoReplacementConfig): string {
+  const start = parseScheduledTime(cfg.scheduledStartTime)
+  const end = parseScheduledTime(cfg.scheduledEndTime)
+  if (start === null || end === null || start === end) return 'all day'
+  return `${cfg.scheduledStartTime}-${cfg.scheduledEndTime}`
+}
+
+function scheduleNextRegistration(): void {
+  clearScheduledRegistrationTimer()
+  const cfg = store?.get('registrationAutoReplacement') as AutoReplacementConfig | undefined
+  if (!cfg?.scheduledEnabled) return
+  const intervalMin = Math.max(1, Number(cfg.scheduledIntervalMin || 30))
+  scheduledRegistrationTimer = setTimeout(
+    async () => {
+      try {
+        await initStore()
+        const latest = store?.get('registrationAutoReplacement') as
+          | AutoReplacementConfig
+          | undefined
+        if (latest?.scheduledEnabled) {
+          const latestIntervalMin = Math.max(1, Number(latest.scheduledIntervalMin || intervalMin))
+          if (isWithinScheduledTimePeriod(latest)) {
+            await runBrowserReplacementRegistration(
+              `Scheduled interval (${latestIntervalMin} min, period ${getScheduledPeriodLabel(latest)})`,
+              false
+            )
+          } else {
+            mainWindow?.webContents.send('registration-log', {
+              message: `[AutoRegister] Skipped scheduled account; outside active period ${getScheduledPeriodLabel(latest)}`
+            })
+          }
+        }
+      } finally {
+        scheduleNextRegistration()
+      }
+    },
+    intervalMin * 60 * 1000
+  )
+  mainWindow?.webContents.send('registration-log', {
+    message: `[AutoRegister] Next scheduled account in ${intervalMin} minutes (${getScheduledPeriodLabel(cfg)})`
+  })
 }
 
 function initProxyServer(): ProxyServer {
@@ -547,7 +672,11 @@ function initProxyServer(): ProxyServer {
         refreshToken: account.refreshToken,
         expiresAt: account.expiresAt,
         suspended: account.suspended,
-        isAvailable: account.isAvailable
+        isAvailable: account.isAvailable,
+        status: account.suspended ? 'error' : undefined,
+        lastError: account.suspended
+          ? 'Account temporarily suspended or locked by AWS/Kiro'
+          : undefined
       })
     },
     // Credits 更新回调 - 使用防抖持久化
@@ -2073,6 +2202,7 @@ app.whenReady().then(async () => {
   // 加载托盘设置并初始化托盘
   await loadTraySettings()
   initTray()
+  scheduleNextRegistration()
 
   // 初始化自动更新（仅生产环境）
   if (!is.dev) {
@@ -2223,12 +2353,25 @@ app.whenReady().then(async () => {
     }
   )
 
+  ipcMain.handle('registration-get-auto-replacement-config', async () => {
+    try {
+      await initStore()
+      return (store?.get('registrationAutoReplacement') as AutoReplacementConfig | undefined) || {}
+    } catch {
+      return {}
+    }
+  })
+
   ipcMain.handle(
     'registration-save-auto-replacement-config',
     async (_event, config: AutoReplacementConfig) => {
       try {
         await initStore()
-        store?.set('registrationAutoReplacement', config)
+        const existing =
+          (store?.get('registrationAutoReplacement') as AutoReplacementConfig | undefined) || {}
+        const merged = { ...existing, ...config }
+        store?.set('registrationAutoReplacement', merged)
+        scheduleNextRegistration()
         return { success: true }
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -6189,19 +6332,9 @@ app.whenReady().then(async () => {
     try {
       const server = initProxyServer()
       const pool = server.getAccountPool()
-      const suspendedIds = new Set(
-        pool
-          .getAllAccounts()
-          .filter((account) => account.suspended)
-          .map((account) => account.id)
-      )
       pool.clear()
-      for (const account of accounts) {
-        pool.addAccount(
-          suspendedIds.has(account.id)
-            ? { ...account, suspended: true, isAvailable: false }
-            : account
-        )
+      for (const account of accounts.filter((account) => !account.suspended)) {
+        pool.addAccount(account)
       }
       return { success: true, accountCount: pool.size }
     } catch (error) {

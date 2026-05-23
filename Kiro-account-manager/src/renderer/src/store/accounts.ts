@@ -33,7 +33,7 @@ function generateRandomMachineId(): string {
   const bytes = new Uint8Array(32)
   crypto.getRandomValues(bytes)
   return Array.from(bytes)
-    .map(b => b.toString(16).padStart(2, '0'))
+    .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
 }
 
@@ -203,9 +203,11 @@ function isBannedAccountError(error?: string): boolean {
   const hasSuspendedSignal =
     lowerError.includes('accountsuspendedexception') ||
     lowerError.includes('account suspended') ||
-    lowerError.includes('temporarily_suspended') ||
     lowerError.includes('temporarily suspended') ||
-    (lowerError.includes('user id is') && lowerError.includes('suspended')) ||
+    lowerError.includes('suspended') ||
+    lowerError.includes('locked') ||
+    lowerError.includes('security precaution') ||
+    lowerError.includes('temporarily_suspended') ||
     lowerError.includes('账户已封禁') ||
     lowerError.includes('已封禁') ||
     /\b423\b/.test(lowerError)
@@ -245,8 +247,6 @@ interface AccountsState {
 
   // 筛选和排序
   filter: AccountFilter
-  /** 当前激活的分组 Tab：'all' | 'ungrouped' | <groupId>，互斥 */
-  activeGroupTab: string
   sort: AccountSort
 
   // 选中的账号（用于批量操作）
@@ -351,7 +351,6 @@ interface AccountsActions {
   // 筛选和排序
   setFilter: (filter: AccountFilter) => void
   clearFilter: () => void
-  setActiveGroupTab: (tab: string) => void
   setSort: (sort: AccountSort) => void
   getFilteredAccounts: () => Account[]
 
@@ -400,7 +399,7 @@ interface AccountsActions {
   setUsagePrecision: (enabled: boolean) => void
 
   // 代理设置
-  setProxy: (enabled: boolean, url?: string) => Promise<void>
+  setProxy: (enabled: boolean, url?: string) => void
 
   // 主题设置
   setTheme: (theme: string) => void
@@ -432,23 +431,31 @@ interface AccountsActions {
   checkAndRefreshExpiringTokens: () => Promise<void>
   refreshExpiredTokensOnly: () => Promise<void>
   triggerBackgroundRefresh: () => Promise<void>
-  handleBackgroundRefreshResult: (data: { id: string; success: boolean; data?: unknown; error?: string }) => void
-  handleBackgroundCheckResult: (data: { id: string; success: boolean; data?: unknown; error?: string }) => void
-  /** 批量处理后台刷新结果：一次 set 应用 N 条结果，消除 N 次 Map 全量复制 */
-  applyBackgroundRefreshResults: (items: Array<{ id: string; success: boolean; data?: unknown; error?: string }>) => void
-  /** 批量处理后台检查结果：一次 set 应用 N 条结果 */
-  applyBackgroundCheckResults: (items: Array<{ id: string; success: boolean; data?: unknown; error?: string }>) => void
+  handleBackgroundRefreshResult: (data: {
+    id: string
+    success: boolean
+    data?: unknown
+    error?: string
+  }) => void
+  handleBackgroundCheckResult: (data: {
+    id: string
+    success: boolean
+    data?: unknown
+    error?: string
+  }) => void
 
   // 定时自动保存（防止数据丢失）
   startAutoSave: () => void
   stopAutoSave: () => void
 
   // 机器码管理
-  setMachineIdConfig: (config: Partial<{
-    autoSwitchOnAccountChange: boolean
-    bindMachineIdToAccount: boolean
-    useBindedMachineId: boolean
-  }>) => void
+  setMachineIdConfig: (
+    config: Partial<{
+      autoSwitchOnAccountChange: boolean
+      bindMachineIdToAccount: boolean
+      useBindedMachineId: boolean
+    }>
+  ) => void
   refreshCurrentMachineId: () => Promise<void>
   changeMachineId: (newMachineId?: string) => Promise<boolean>
   restoreOriginalMachineId: () => Promise<boolean>
@@ -515,15 +522,6 @@ const defaultSort: AccountSort = { field: 'lastUsedAt', order: 'desc' }
 // 默认筛选
 const defaultFilter: AccountFilter = {}
 
-// 从 localStorage 恢复分组 Tab（遵循 Electron renderer 环境总是可用）
-const loadActiveGroupTab = (): string => {
-  try {
-    return localStorage.getItem('accounts_activeGroupTab') || 'all'
-  } catch {
-    return 'all'
-  }
-}
-
 export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   // 初始状态
   appVersion: '1.0.0',
@@ -532,7 +530,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   tags: new Map(),
   activeAccountId: null,
   filter: defaultFilter,
-  activeGroupTab: loadActiveGroupTab(),
   sort: defaultSort,
   selectedIds: new Set(),
   isLoading: false,
@@ -666,7 +663,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   setActiveAccount: async (id) => {
     const state = get()
-    
+
     set((s) => {
       const accounts = new Map(s.accounts)
 
@@ -688,22 +685,22 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
       return { accounts, activeAccountId: id }
     })
-    
+
     // 切换账号时自动更换机器码（如果启用）
     if (id && state.machineIdConfig.autoSwitchOnAccountChange) {
       try {
         const account = state.accounts.get(id)
-        
+
         if (state.machineIdConfig.bindMachineIdToAccount) {
           // 使用账户绑定的机器码
           let boundMachineId = state.accountMachineIds[id]
-          
+
           if (!boundMachineId) {
             // 如果没有绑定机器码，为该账户生成一个
             boundMachineId = await window.api.machineIdGenerateRandom()
             get().bindMachineIdToAccount(id, boundMachineId)
           }
-          
+
           if (state.machineIdConfig.useBindedMachineId) {
             // 使用绑定的机器码
             await get().changeMachineId(boundMachineId)
@@ -715,7 +712,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           // 每次切换都随机生成新机器码
           await get().changeMachineId()
         }
-        
+
         // 更新历史记录
         const newMachineId = get().currentMachineId
         set((s) => ({
@@ -731,19 +728,19 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             }
           ]
         }))
-        
+
         console.log(`[MachineId] Auto-switched machine ID for account: ${account?.email}`)
       } catch (error) {
         console.error('[MachineId] Failed to auto-switch machine ID:', error)
       }
     }
-    
+
     get().saveToStorage()
   },
 
   getActiveAccount: () => {
     const { accounts, activeAccountId } = get()
-    return activeAccountId ? accounts.get(activeAccountId) ?? null : null
+    return activeAccountId ? (accounts.get(activeAccountId) ?? null) : null
   },
 
   // ==================== 分组操作 ====================
@@ -904,17 +901,12 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     set({ filter: defaultFilter })
   },
 
-  setActiveGroupTab: (tab) => {
-    try { localStorage.setItem('accounts_activeGroupTab', tab) } catch { /* no-op */ }
-    set({ activeGroupTab: tab })
-  },
-
   setSort: (sort) => {
     set({ sort })
   },
 
   getFilteredAccounts: () => {
-    const { accounts, filter, sort, activeGroupTab } = get()
+    const { accounts, filter, sort } = get()
 
     // 引用缓存命中：返回上次结果（数组同引用，便于消费方 useMemo 复用）
     if (
@@ -929,20 +921,11 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     let result = Array.from(accounts.values())
 
-    // 优先按分组 Tab 互斥过滤（与 filter.groupIds 独立）
-    if (activeGroupTab === 'ungrouped') {
-      result = result.filter((a) => !a.groupId)
-    } else if (activeGroupTab !== 'all') {
-      result = result.filter((a) => a.groupId === activeGroupTab)
-    }
-
     // 应用筛选
     if (filter.search) {
       const search = filter.search.toLowerCase()
       result = result.filter(
-        (a) =>
-          a.email.toLowerCase().includes(search) ||
-          a.nickname?.toLowerCase().includes(search)
+        (a) => a.email.toLowerCase().includes(search) || a.nickname?.toLowerCase().includes(search)
       )
     }
 
@@ -976,15 +959,17 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     if (filter.daysRemainingMin !== undefined) {
       result = result.filter(
-        (a) => a.subscription.daysRemaining !== undefined &&
-               a.subscription.daysRemaining >= filter.daysRemainingMin!
+        (a) =>
+          a.subscription.daysRemaining !== undefined &&
+          a.subscription.daysRemaining >= filter.daysRemainingMin!
       )
     }
 
     if (filter.daysRemainingMax !== undefined) {
       result = result.filter(
-        (a) => a.subscription.daysRemaining !== undefined &&
-               a.subscription.daysRemaining <= filter.daysRemainingMax!
+        (a) =>
+          a.subscription.daysRemaining !== undefined &&
+          a.subscription.daysRemaining <= filter.daysRemainingMax!
       )
     }
 
@@ -1111,7 +1096,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     const validIdps = ['Google', 'Github', 'BuilderId'] as const
     const normalizeIdp = (idp?: string): IdpType => {
       if (!idp) return 'Google'
-      const normalized = validIdps.find(v => v.toLowerCase() === idp.toLowerCase())
+      const normalized = validIdps.find((v) => v.toLowerCase() === idp.toLowerCase())
       return normalized || 'Google'
     }
 
@@ -1185,10 +1170,10 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   importFromExportData: (data) => {
     const result: BatchOperationResult = { success: 0, failed: 0, errors: [] }
     const { accounts: existingAccounts } = get()
-    
+
     // 检查账户是否已存在（同邮箱+同provider 或 同userId 才算重复）
     const isAccountExists = (email: string, userId?: string, provider?: string): boolean => {
-      return Array.from(existingAccounts.values()).some(acc => {
+      return Array.from(existingAccounts.values()).some((acc) => {
         // userId 相同则重复
         if (userId && acc.userId === userId) return true
         // email 相同且 provider 相同则重复（允许同邮箱不同登录方式）
@@ -1196,11 +1181,11 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         return false
       })
     }
-    
+
     // 去重：文件内部去重
     const seenEmails = new Set<string>()
     const seenUserIds = new Set<string>()
-    const uniqueAccounts = data.accounts.filter(acc => {
+    const uniqueAccounts = data.accounts.filter((acc) => {
       if (seenEmails.has(acc.email) || (acc.userId && seenUserIds.has(acc.userId))) {
         return false
       }
@@ -1215,10 +1200,13 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     for (const accountData of uniqueAccounts) {
       // 检查本地是否已存在（传入 provider 参数）
-      if (isAccountExists(accountData.email, accountData.userId, accountData.credentials?.provider)) {
+      if (
+        isAccountExists(accountData.email, accountData.userId, accountData.credentials?.provider)
+      ) {
         skipped++
         continue
       }
+
       try {
         accountsToAdd.push({ ...accountData, isActive: false })
         result.success++
@@ -1229,25 +1217,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           error: error instanceof Error ? error.message : 'Unknown error'
         })
       }
-    }
-
-    // 一次 set 应用所有分组、标签、账号 — 单次 re-render
-    if (data.groups.length > 0 || data.tags.length > 0 || accountsToAdd.length > 0) {
-      set((state) => {
-        const groups = data.groups.length > 0 ? new Map(state.groups) : state.groups
-        if (data.groups.length > 0) {
-          for (const group of data.groups) groups.set(group.id, group)
-        }
-        const tags = data.tags.length > 0 ? new Map(state.tags) : state.tags
-        if (data.tags.length > 0) {
-          for (const tag of data.tags) tags.set(tag.id, tag)
-        }
-        const accounts = accountsToAdd.length > 0 ? new Map(state.accounts) : state.accounts
-        if (accountsToAdd.length > 0) {
-          for (const acc of accountsToAdd) accounts.set(acc.id, acc)
-        }
-        return { groups, tags, accounts }
-      })
     }
 
     // 记录跳过数量
@@ -1347,7 +1316,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   batchRefreshTokens: async (ids) => {
     const { accounts, autoRefreshConcurrency } = get()
-    
+
     // 收集需要刷新的账号
     const accountsToRefresh: Array<{
       id: string
@@ -1365,7 +1334,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     for (const id of ids) {
       const account = accounts.get(id)
       if (!account?.credentials.refreshToken) continue
-      
+
       accountsToRefresh.push({
         id,
         email: account.email,
@@ -1384,15 +1353,20 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       return { success: 0, failed: 0, errors: [] }
     }
 
-    console.log(`[BatchRefresh] Triggering background refresh for ${accountsToRefresh.length} accounts...`)
-    
+    console.log(
+      `[BatchRefresh] Triggering background refresh for ${accountsToRefresh.length} accounts...`
+    )
+
     // 使用后台刷新 API（不阻塞 UI）
-    const result = await window.api.backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency)
-    
-    return { 
-      success: result.successCount, 
-      failed: result.failedCount, 
-      errors: [] 
+    const result = await window.api.backgroundBatchRefresh(
+      accountsToRefresh,
+      autoRefreshConcurrency
+    )
+
+    return {
+      success: result.successCount,
+      failed: result.failedCount,
+      errors: []
     }
   },
 
@@ -1415,38 +1389,43 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           const acc = accounts.get(id)
           if (acc) {
             // 如果 token 被刷新，更新凭证
-            const updatedCredentials = result.data!.newCredentials 
+            const updatedCredentials = result.data!.newCredentials
               ? {
                   ...acc.credentials,
                   accessToken: result.data!.newCredentials.accessToken,
-                  refreshToken: result.data!.newCredentials.refreshToken ?? acc.credentials.refreshToken,
+                  refreshToken:
+                    result.data!.newCredentials.refreshToken ?? acc.credentials.refreshToken,
                   expiresAt: result.data!.newCredentials.expiresAt ?? acc.credentials.expiresAt
                 }
               : acc.credentials
 
             // 合并 usage 数据，确保包含所有必要字段
             const apiUsage = result.data!.usage
-            const mergedUsage = apiUsage ? {
-              current: apiUsage.current ?? acc.usage.current,
-              limit: apiUsage.limit ?? acc.usage.limit,
-              percentUsed: apiUsage.limit > 0 ? apiUsage.current / apiUsage.limit : 0,
-              lastUpdated: apiUsage.lastUpdated ?? Date.now(),
-              baseLimit: apiUsage.baseLimit,
-              baseCurrent: apiUsage.baseCurrent,
-              freeTrialLimit: apiUsage.freeTrialLimit,
-              freeTrialCurrent: apiUsage.freeTrialCurrent,
-              freeTrialExpiry: apiUsage.freeTrialExpiry,
-              bonuses: apiUsage.bonuses,
-              nextResetDate: apiUsage.nextResetDate,
-              resourceDetail: apiUsage.resourceDetail
-            } : acc.usage
+            const mergedUsage = apiUsage
+              ? {
+                  current: apiUsage.current ?? acc.usage.current,
+                  limit: apiUsage.limit ?? acc.usage.limit,
+                  percentUsed: apiUsage.limit > 0 ? apiUsage.current / apiUsage.limit : 0,
+                  lastUpdated: apiUsage.lastUpdated ?? Date.now(),
+                  baseLimit: apiUsage.baseLimit,
+                  baseCurrent: apiUsage.baseCurrent,
+                  freeTrialLimit: apiUsage.freeTrialLimit,
+                  freeTrialCurrent: apiUsage.freeTrialCurrent,
+                  freeTrialExpiry: apiUsage.freeTrialExpiry,
+                  bonuses: apiUsage.bonuses,
+                  nextResetDate: apiUsage.nextResetDate,
+                  resourceDetail: apiUsage.resourceDetail
+                }
+              : acc.usage
 
             // 合并订阅信息
             const apiSub = result.data!.subscription
-            const mergedSubscription = apiSub ? {
-              ...acc.subscription,
-              ...apiSub
-            } : acc.subscription
+            const mergedSubscription = apiSub
+              ? {
+                  ...acc.subscription,
+                  ...apiSub
+                }
+              : acc.subscription
 
             // 转换 IDP 类型（保持原值优先，只有明确匹配时才更新）
             const apiIdp = result.data!.idp
@@ -1477,7 +1456,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           return { accounts }
         })
         get().saveToStorage()
-        
+
         // 如果刷新了 token，打印日志
         if (result.data.newCredentials) {
           console.log(`[Account] Token refreshed for ${account?.email}`)
@@ -1506,7 +1485,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           const bannedAccount = get().accounts.get(id)
           if (bannedAccount?.isActive) {
             const available = Array.from(get().accounts.values()).find(
-              a => a.id !== id && !isBannedAccountError(a.lastError)
+              (a) => a.id !== id && !isBannedAccountError(a.lastError)
             )
             if (available) {
               get().setActiveAccount(available.id)
@@ -1525,7 +1504,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   batchCheckStatus: async (ids) => {
     const { accounts, autoRefreshConcurrency } = get()
-    
+
     // 收集需要检查的账号（使用批量检查 API，不刷新 Token）
     const accountsToCheck: Array<{
       id: string
@@ -1545,7 +1524,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     for (const id of ids) {
       const account = accounts.get(id)
       if (!account?.credentials.accessToken) continue
-      
+
       accountsToCheck.push({
         id,
         email: account.email,
@@ -1566,15 +1545,17 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       return { success: 0, failed: 0, errors: [] }
     }
 
-    console.log(`[BatchCheck] Triggering background check for ${accountsToCheck.length} accounts...`)
-    
+    console.log(
+      `[BatchCheck] Triggering background check for ${accountsToCheck.length} accounts...`
+    )
+
     // 使用后台检查 API（只检查状态，不刷新 Token）
     const result = await window.api.backgroundBatchCheck(accountsToCheck, autoRefreshConcurrency)
-    
-    return { 
-      success: result.successCount, 
-      failed: result.failedCount, 
-      errors: [] 
+
+    return {
+      success: result.successCount,
+      failed: result.failedCount,
+      errors: []
     }
   },
 
@@ -1626,8 +1607,10 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       stats.byIdp[account.idp]++
 
       if (account.isActive) stats.activeCount++
-      if (account.subscription.daysRemaining !== undefined &&
-          account.subscription.daysRemaining <= 7) {
+      if (
+        account.subscription.daysRemaining !== undefined &&
+        account.subscription.daysRemaining <= 7
+      ) {
         stats.expiringSoonCount++
       }
       // 统计封禁账号
@@ -1663,8 +1646,118 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             account.machineId = generateRandomMachineId()
             accounts.set(id, account)
             needsSave = true
-            console.log(`[Store] Generated machineId for account ${account.email}: ${account.machineId.substring(0, 16)}...`)
+            console.log(
+              `[Store] Generated machineId for account ${account.email}: ${account.machineId.substring(0, 16)}...`
+            )
           }
+        }
+
+        // 同步本地 SSO 缓存中的账号状态
+        try {
+          const localResult = await window.api.getLocalActiveAccount()
+          if (localResult.success && localResult.data?.refreshToken) {
+            const localRefreshToken = localResult.data.refreshToken
+            // 查找匹配的账号
+            let foundAccountId: string | null = null
+            for (const [id, account] of accounts) {
+              if (account.credentials.refreshToken === localRefreshToken) {
+                foundAccountId = id
+                break
+              }
+            }
+            // 如果找到匹配的账号，设为当前使用
+            if (foundAccountId) {
+              activeAccountId = foundAccountId
+              console.log('[Store] Synced active account from local SSO cache:', foundAccountId)
+            } else {
+              // 如果没有找到匹配的账号，自动导入
+              console.log('[Store] Local account not found in app, importing...')
+              const importResult = await window.api.loadKiroCredentials()
+              if (importResult.success && importResult.data) {
+                // 验证并获取账号信息
+                const verifyResult = await window.api.verifyAccountCredentials({
+                  refreshToken: importResult.data.refreshToken,
+                  clientId: importResult.data.clientId || '',
+                  clientSecret: importResult.data.clientSecret || '',
+                  region: importResult.data.region,
+                  authMethod: importResult.data.authMethod,
+                  provider: importResult.data.provider
+                })
+                if (verifyResult.success && verifyResult.data) {
+                  const now = Date.now()
+                  const newId = `${verifyResult.data.email}-${now}`
+                  const newAccount: Account = {
+                    id: newId,
+                    email: verifyResult.data.email,
+                    userId: verifyResult.data.userId,
+                    nickname: verifyResult.data.email
+                      ? verifyResult.data.email.split('@')[0]
+                      : undefined,
+                    idp: (importResult.data.provider || 'BuilderId') as
+                      | 'BuilderId'
+                      | 'Google'
+                      | 'Github',
+                    credentials: {
+                      accessToken: verifyResult.data.accessToken,
+                      csrfToken: '',
+                      refreshToken: verifyResult.data.refreshToken,
+                      clientId: importResult.data.clientId || '',
+                      clientSecret: importResult.data.clientSecret || '',
+                      region: importResult.data.region || 'us-east-1',
+                      expiresAt: verifyResult.data.expiresIn
+                        ? now + verifyResult.data.expiresIn * 1000
+                        : now + 3600 * 1000,
+                      authMethod: importResult.data.authMethod as 'IdC' | 'social',
+                      provider: (importResult.data.provider || 'BuilderId') as
+                        | 'BuilderId'
+                        | 'Github'
+                        | 'Google'
+                    },
+                    subscription: {
+                      type: verifyResult.data.subscriptionType as SubscriptionType,
+                      title: verifyResult.data.subscriptionTitle,
+                      rawType: verifyResult.data.subscription?.rawType,
+                      daysRemaining: verifyResult.data.daysRemaining,
+                      expiresAt: verifyResult.data.expiresAt,
+                      managementTarget: verifyResult.data.subscription?.managementTarget,
+                      upgradeCapability: verifyResult.data.subscription?.upgradeCapability,
+                      overageCapability: verifyResult.data.subscription?.overageCapability
+                    },
+                    usage: {
+                      current: verifyResult.data.usage.current,
+                      limit: verifyResult.data.usage.limit,
+                      percentUsed:
+                        verifyResult.data.usage.limit > 0
+                          ? verifyResult.data.usage.current / verifyResult.data.usage.limit
+                          : 0,
+                      lastUpdated: now,
+                      baseLimit: verifyResult.data.usage.baseLimit,
+                      baseCurrent: verifyResult.data.usage.baseCurrent,
+                      freeTrialLimit: verifyResult.data.usage.freeTrialLimit,
+                      freeTrialCurrent: verifyResult.data.usage.freeTrialCurrent,
+                      freeTrialExpiry: verifyResult.data.usage.freeTrialExpiry,
+                      bonuses: verifyResult.data.usage.bonuses,
+                      nextResetDate: verifyResult.data.usage.nextResetDate,
+                      resourceDetail: verifyResult.data.usage.resourceDetail
+                    },
+                    status: 'active',
+                    createdAt: now,
+                    lastUsedAt: now,
+                    tags: [],
+                    isActive: true
+                  }
+                  accounts.set(newId, newAccount)
+                  activeAccountId = newId
+                  console.log(
+                    '[Store] Auto-imported account from local SSO cache:',
+                    verifyResult.data.email
+                  )
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[Store] Failed to sync local active account:', e)
         }
 
         // 根据 activeAccountId 重新同步所有账号的 isActive 状态，确保只有一个账号为激活状态
@@ -1714,9 +1807,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         // 应用主题
         get().applyTheme()
 
-        // 如果代理已启用，通过 store 的 setProxy（会自动 normalize URL 并回写 UI）
+        // 如果代理已启用，通知主进程
         if (data.proxyEnabled && data.proxyUrl) {
-          void get().setProxy(true, data.proxyUrl)
+          window.api.setProxy?.(true, data.proxyUrl)
         }
 
         // 如果自动换号已启用，启动定时器
@@ -1851,7 +1944,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       autoRefreshInterval: interval ?? get().autoRefreshInterval
     })
     get().saveToStorage()
-    
+
     // 重新启动定时器
     if (enabled) {
       get().startAutoTokenRefresh()
@@ -1906,23 +1999,14 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   // ==================== 代理设置 ====================
 
-  setProxy: async (enabled, url) => {
-    const targetUrl = url ?? get().proxyUrl
-    set({ 
+  setProxy: (enabled, url) => {
+    set({
       proxyEnabled: enabled,
-      proxyUrl: targetUrl
+      proxyUrl: url ?? get().proxyUrl
     })
     get().saveToStorage()
-    // 通知主进程更新代理设置，并用规范化后的 URL 回写 store
-    try {
-      const result = await window.api.setProxy?.(enabled, targetUrl)
-      if (result?.normalizedUrl && result.normalizedUrl !== targetUrl) {
-        set({ proxyUrl: result.normalizedUrl })
-        get().saveToStorage()
-      }
-    } catch (err) {
-      console.error('[Store] setProxy IPC failed:', err)
-    }
+    // 通知主进程更新代理设置
+    window.api.setProxy?.(enabled, url ?? get().proxyUrl)
   },
 
   // ==================== 主题设置 ====================
@@ -1945,42 +2029,50 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     set({ language })
     get().saveToStorage()
     // 更新托盘菜单语言
-    const actualLang = language === 'auto' 
-      ? (navigator.language.startsWith('zh') ? 'zh' : 'en')
-      : language
+    const actualLang =
+      language === 'auto' ? (navigator.language.startsWith('zh') ? 'zh' : 'en') : language
     window.api.updateTrayLanguage(actualLang)
   },
 
   applyTheme: () => {
     const { theme, darkMode } = get()
     const root = document.documentElement
-    
-    // 移除所有主题类（包含所有 32 个主题）
+
+    // 移除所有主题类（包含所有 21 个主题）
     root.classList.remove(
-      'dark', 
+      'dark',
       // 蓝色系
-      'theme-indigo', 'theme-cyan', 'theme-sky', 'theme-teal',
+      'theme-indigo',
+      'theme-cyan',
+      'theme-sky',
+      'theme-teal',
       // 紫红系
-      'theme-purple', 'theme-violet', 'theme-fuchsia', 'theme-pink', 'theme-rose',
+      'theme-purple',
+      'theme-violet',
+      'theme-fuchsia',
+      'theme-pink',
+      'theme-rose',
       // 暖色系
-      'theme-red', 'theme-orange', 'theme-amber', 'theme-yellow',
+      'theme-red',
+      'theme-orange',
+      'theme-amber',
+      'theme-yellow',
       // 绿色系
-      'theme-emerald', 'theme-green', 'theme-lime',
+      'theme-emerald',
+      'theme-green',
+      'theme-lime',
       // 中性色
-      'theme-slate', 'theme-zinc', 'theme-stone', 'theme-neutral',
-      // 奢华配色
-      'theme-gold', 'theme-navy', 'theme-wine', 'theme-champagne',
-      // 莫兰迪
-      'theme-dustyblue', 'theme-terracotta', 'theme-sage', 'theme-mauve',
-      // 自然深色
-      'theme-coral', 'theme-forest', 'theme-ocean'
+      'theme-slate',
+      'theme-zinc',
+      'theme-stone',
+      'theme-neutral'
     )
-    
+
     // 应用深色模式
     if (darkMode) {
       root.classList.add('dark')
     }
-    
+
     // 应用主题颜色
     if (theme !== 'default') {
       root.classList.add(`theme-${theme}`)
@@ -1996,7 +2088,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       autoSwitchInterval: interval ?? get().autoSwitchInterval
     })
     get().saveToStorage()
-    
+
     // 重新启动定时器
     if (enabled) {
       get().startAutoSwitch()
@@ -2022,22 +2114,25 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   startAutoSwitch: () => {
     const { autoSwitchEnabled, autoSwitchInterval, checkAndAutoSwitch } = get()
-    
+
     if (!autoSwitchEnabled) return
-    
+
     // 清除现有定时器
     if (autoSwitchTimer) {
       clearInterval(autoSwitchTimer)
     }
-    
+
     // 立即检查一次
     checkAndAutoSwitch()
-    
+
     // 设置定时检查
-    autoSwitchTimer = setInterval(() => {
-      checkAndAutoSwitch()
-    }, autoSwitchInterval * 60 * 1000)
-    
+    autoSwitchTimer = setInterval(
+      () => {
+        checkAndAutoSwitch()
+      },
+      autoSwitchInterval * 60 * 1000
+    )
+
     console.log(`[AutoSwitch] Started with interval: ${autoSwitchInterval} minutes`)
   },
 
@@ -2052,7 +2147,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   checkAndAutoSwitch: async () => {
     const { accounts, autoSwitchThreshold, checkAccountStatus, setActiveAccount } = get()
     const activeAccount = get().getActiveAccount()
-    
+
     if (!activeAccount) {
       console.log('[AutoSwitch] No active account')
       return
@@ -2062,7 +2157,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     // 刷新当前账号状态获取最新余额
     await checkAccountStatus(activeAccount.id)
-    
+
     // 重新获取更新后的账号信息
     const updatedAccount = get().accounts.get(activeAccount.id)
     if (!updatedAccount) return
@@ -2073,9 +2168,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     // 检查是否需要切换
     if (remaining <= autoSwitchThreshold) {
       console.log(`[AutoSwitch] Account ${updatedAccount.email} reached threshold, switching...`)
-      
+
       // 查找可用的账号
-      const availableAccount = Array.from(accounts.values()).find(acc => {
+      const availableAccount = Array.from(accounts.values()).find((acc) => {
         // 排除当前账号
         if (acc.id === activeAccount.id) return false
         // 排除被封禁的账号
@@ -2106,15 +2201,17 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           })
         }
         if (target === 'cli' || target === 'both') {
-          window.api.switchAccountCli?.({
-            accessToken: creds.accessToken || '',
-            refreshToken: creds.refreshToken || '',
-            clientId: creds.clientId,
-            clientSecret: creds.clientSecret,
-            region: creds.region || 'us-east-1',
-            profileArn: (availableAccount as { profileArn?: string }).profileArn,
-            provider: creds.provider
-          }).catch(err => console.warn('[AutoSwitch CLI] Failed:', err))
+          window.api
+            .switchAccountCli?.({
+              accessToken: creds.accessToken || '',
+              refreshToken: creds.refreshToken || '',
+              clientId: creds.clientId,
+              clientSecret: creds.clientSecret,
+              region: creds.region || 'us-east-1',
+              profileArn: (availableAccount as { profileArn?: string }).profileArn,
+              provider: creds.provider
+            })
+            .catch((err) => console.warn('[AutoSwitch CLI] Failed:', err))
         }
       } else {
         console.log('[AutoSwitch] No available account to switch to')
@@ -2125,14 +2222,23 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   // ==================== 自动 Token 刷新 ====================
 
   checkAndRefreshExpiringTokens: async () => {
-    const { accounts, refreshAccountToken, checkAccountStatus, autoSwitchEnabled, autoRefreshConcurrency, autoRefreshSyncInfo } = get()
+    const {
+      accounts,
+      refreshAccountToken,
+      checkAccountStatus,
+      autoSwitchEnabled,
+      autoRefreshConcurrency,
+      autoRefreshSyncInfo
+    } = get()
     const now = Date.now()
 
-    console.log(`[AutoRefresh] Checking ${accounts.size} accounts... (syncInfo: ${autoRefreshSyncInfo}, autoSwitch: ${autoSwitchEnabled})`)
+    console.log(
+      `[AutoRefresh] Checking ${accounts.size} accounts... (syncInfo: ${autoRefreshSyncInfo}, autoSwitch: ${autoSwitchEnabled})`
+    )
 
     // 筛选需要处理的账号
     const accountsToProcess: Array<{ id: string; email: string; needsTokenRefresh: boolean }> = []
-    
+
     for (const [id, account] of accounts) {
       // 跳过已封禁或错误状态的账号
       if (isBannedAccountError(account.lastError)) {
@@ -2178,13 +2284,14 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           }
         })
       )
-      
-      successCount += results.filter(r => r.status === 'fulfilled' && r.value.success).length
-      failCount += results.length - results.filter(r => r.status === 'fulfilled' && r.value.success).length
-      
+
+      successCount += results.filter((r) => r.status === 'fulfilled' && r.value.success).length
+      failCount +=
+        results.length - results.filter((r) => r.status === 'fulfilled' && r.value.success).length
+
       // 批次间延迟
       if (i + BATCH_SIZE < accountsToProcess.length) {
-        await new Promise(resolve => setTimeout(resolve, 200))
+        await new Promise((resolve) => setTimeout(resolve, 200))
       }
     }
 
@@ -2198,7 +2305,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     // 筛选需要刷新 Token 的账号
     const expiredAccounts: Array<{ id: string; email: string }> = []
-    
+
     for (const [id, account] of accounts) {
       // 跳过已封禁或错误状态的账号
       if (isBannedAccountError(account.lastError)) {
@@ -2207,7 +2314,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
       const expiresAt = account.credentials.expiresAt
       const timeUntilExpiry = expiresAt ? expiresAt - now : Infinity
-      
+
       // Token 已过期或即将过期
       if (expiresAt && timeUntilExpiry <= TOKEN_REFRESH_BEFORE_EXPIRY) {
         expiredAccounts.push({ id, email: account.email })
@@ -2237,20 +2344,20 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       )
       // 批次间延迟
       if (i + BATCH_SIZE < expiredAccounts.length) {
-        await new Promise(resolve => setTimeout(resolve, 200))
+        await new Promise((resolve) => setTimeout(resolve, 200))
       }
     }
   },
 
   startAutoTokenRefresh: () => {
     const { autoRefreshEnabled, autoRefreshInterval } = get()
-    
+
     // 如果已有定时器，先停止
     if (tokenRefreshTimer) {
       clearInterval(tokenRefreshTimer)
       tokenRefreshTimer = null
     }
-    
+
     // 如果未启用，不启动定时器
     if (!autoRefreshEnabled) {
       console.log('[AutoRefresh] Auto-refresh is disabled')
@@ -2266,7 +2373,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       get().triggerBackgroundRefresh()
     }, intervalMs)
 
-    console.log(`[AutoRefresh] Token auto-refresh started with interval: ${autoRefreshInterval} minutes`)
+    console.log(
+      `[AutoRefresh] Token auto-refresh started with interval: ${autoRefreshInterval} minutes`
+    )
   },
 
   stopAutoTokenRefresh: () => {
@@ -2288,7 +2397,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       email: string
       idp?: string
       needsTokenRefresh: boolean
-      machineId?: string  // 账户绑定的设备 ID
+      machineId?: string // 账户绑定的设备 ID
       credentials: {
         refreshToken: string
         clientId?: string
@@ -2299,7 +2408,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         provider?: string
       }
     }> = []
-    
+
     for (const [id, account] of accounts) {
       // 跳过已封禁或错误状态的账号
       if (isBannedAccountError(account.lastError)) {
@@ -2309,7 +2418,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       const expiresAt = account.credentials.expiresAt
       const timeUntilExpiry = expiresAt ? expiresAt - now : Infinity
       const needsTokenRefresh = expiresAt && timeUntilExpiry <= TOKEN_REFRESH_BEFORE_EXPIRY
-      
+
       // Token 即将过期需要刷新，或开启了同步检测/自动换号需要检查账户信息
       if (needsTokenRefresh || autoRefreshSyncInfo || autoSwitchEnabled) {
         accountsToRefresh.push({
@@ -2317,7 +2426,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           email: account.email,
           idp: account.idp,
           needsTokenRefresh: !!needsTokenRefresh,
-          machineId: account.machineId,  // 传递账户绑定的设备 ID
+          machineId: account.machineId, // 传递账户绑定的设备 ID
           credentials: {
             refreshToken: account.credentials.refreshToken || '',
             clientId: account.credentials.clientId,
@@ -2336,28 +2445,27 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       return
     }
 
-    console.log(`[BackgroundRefresh] Triggering refresh for ${accountsToRefresh.length} accounts (syncInfo: ${autoRefreshSyncInfo})...`)
-    
+    console.log(
+      `[BackgroundRefresh] Triggering refresh for ${accountsToRefresh.length} accounts (syncInfo: ${autoRefreshSyncInfo})...`
+    )
+
     // 调用主进程后台刷新，不等待结果（通过 IPC 事件接收）
-    window.api.backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency, autoRefreshSyncInfo)
+    window.api.backgroundBatchRefresh(
+      accountsToRefresh,
+      autoRefreshConcurrency,
+      autoRefreshSyncInfo
+    )
   },
 
   // 处理后台刷新结果（兼容入口；高频场景请走 applyBackgroundRefreshResults 批量）
   handleBackgroundRefreshResult: (data) => {
-    get().applyBackgroundRefreshResults([data])
-  },
+    const { id, success, data: resultData, error } = data
 
-  // 批量处理后台刷新结果：合并 N 条结果到一次 set，避免 N 次 Map 全量复制
-  applyBackgroundRefreshResults: (items) => {
-    if (!items || items.length === 0) return
-
-    set((state) => {
-      // 仅一次完整 Map 复制
-      const accounts = new Map(state.accounts)
-      const now = Date.now()
-
-      for (const data of items) {
-        const { id, success, data: resultData, error } = data
+    if (!success) {
+      console.log(`[BackgroundRefresh] Account ${id} refresh failed:`, error)
+      // 更新账号错误状态
+      set((state) => {
+        const accounts = new Map(state.accounts)
         const account = accounts.get(id)
         if (!account) continue
 
@@ -2371,39 +2479,64 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           continue
         }
 
-        const refreshData = resultData as {
-        accessToken?: string
-        refreshToken?: string
-        expiresIn?: number
-        usage?: {
-          current?: number
-          limit?: number
-          baseCurrent?: number
-          baseLimit?: number
-          freeTrialCurrent?: number
-          freeTrialLimit?: number
-          freeTrialExpiry?: string
-          bonuses?: Array<{ code: string; name: string; current: number; limit: number; expiresAt?: string }>
-          nextResetDate?: string
-          resourceDetail?: {
-            displayName?: string
-            displayNamePlural?: string
-            resourceType?: string
-            currency?: string
-            unit?: string
-            overageRate?: number
-            overageCap?: number
-            overageEnabled?: boolean
+    // 更新账号状态
+    set((state) => {
+      const accounts = new Map(state.accounts)
+      const account = accounts.get(id)
+
+      if (!account) return state
+
+      const now = Date.now()
+      const refreshData = resultData as
+        | {
+            accessToken?: string
+            refreshToken?: string
+            expiresIn?: number
+            usage?: {
+              current?: number
+              limit?: number
+              baseCurrent?: number
+              baseLimit?: number
+              freeTrialCurrent?: number
+              freeTrialLimit?: number
+              freeTrialExpiry?: string
+              bonuses?: Array<{
+                code: string
+                name: string
+                current: number
+                limit: number
+                expiresAt?: string
+              }>
+              nextResetDate?: string
+              resourceDetail?: {
+                displayName?: string
+                displayNamePlural?: string
+                resourceType?: string
+                currency?: string
+                unit?: string
+                overageRate?: number
+                overageCap?: number
+                overageEnabled?: boolean
+              }
+            }
+            subscription?: {
+              type?: string
+              title?: string
+              daysRemaining?: number
+              expiresAt?: number
+              overageCapability?: string
+              upgradeCapability?: string
+              subscriptionManagementTarget?: string
+            }
+            userInfo?: { email?: string; userId?: string }
+            status?: string
+            errorMessage?: string
           }
-        }
-        subscription?: { type?: string; title?: string; daysRemaining?: number; expiresAt?: number; overageCapability?: string; upgradeCapability?: string; subscriptionManagementTarget?: string }
-        userInfo?: { email?: string; userId?: string }
-        status?: string
-        errorMessage?: string
-      } | undefined
+        | undefined
 
       // 检测封禁状态
-      const newStatus = refreshData?.status === 'error' ? 'error' as AccountStatus : 'active' as AccountStatus
+      const newStatus =
+        refreshData?.status === 'error' ? ('error' as AccountStatus) : ('active' as AccountStatus)
       const newError = refreshData?.errorMessage
 
       accounts.set(id, {
@@ -2412,37 +2545,52 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           ...account.credentials,
           accessToken: refreshData?.accessToken || account.credentials.accessToken,
           refreshToken: refreshData?.refreshToken || account.credentials.refreshToken,
-          expiresAt: refreshData?.expiresIn ? now + refreshData.expiresIn * 1000 : account.credentials.expiresAt
+          expiresAt: refreshData?.expiresIn
+            ? now + refreshData.expiresIn * 1000
+            : account.credentials.expiresAt
         },
-        usage: refreshData?.usage ? (() => {
-          const newCurrent = refreshData.usage.current ?? account.usage.current
-          const newLimit = refreshData.usage.limit ?? account.usage.limit
-          return {
-            ...account.usage,
-            current: newCurrent,
-            limit: newLimit,
-            percentUsed: newLimit > 0 ? newCurrent / newLimit : 0,
-            baseCurrent: refreshData.usage.baseCurrent ?? account.usage.baseCurrent,
-            baseLimit: refreshData.usage.baseLimit ?? account.usage.baseLimit,
-            freeTrialCurrent: refreshData.usage.freeTrialCurrent ?? account.usage.freeTrialCurrent,
-            freeTrialLimit: refreshData.usage.freeTrialLimit ?? account.usage.freeTrialLimit,
-            freeTrialExpiry: refreshData.usage.freeTrialExpiry ?? account.usage.freeTrialExpiry,
-            bonuses: refreshData.usage.bonuses ?? account.usage.bonuses,
-            nextResetDate: refreshData.usage.nextResetDate ?? account.usage.nextResetDate,
-            resourceDetail: refreshData.usage.resourceDetail ?? account.usage.resourceDetail,
-            lastUpdated: now
-          }
-        })() : account.usage,
-        subscription: refreshData?.subscription ? {
-          ...account.subscription,
-          type: (refreshData.subscription.type as SubscriptionType) || account.subscription.type,
-          title: refreshData.subscription.title || account.subscription.title,
-          daysRemaining: refreshData.subscription.daysRemaining ?? account.subscription.daysRemaining,
-          expiresAt: refreshData.subscription.expiresAt ?? account.subscription.expiresAt,
-          overageCapability: refreshData.subscription.overageCapability ?? account.subscription.overageCapability,
-          upgradeCapability: refreshData.subscription.upgradeCapability ?? account.subscription.upgradeCapability,
-          managementTarget: refreshData.subscription.subscriptionManagementTarget ?? account.subscription.managementTarget
-        } : account.subscription,
+        usage: refreshData?.usage
+          ? (() => {
+              const newCurrent = refreshData.usage.current ?? account.usage.current
+              const newLimit = refreshData.usage.limit ?? account.usage.limit
+              return {
+                ...account.usage,
+                current: newCurrent,
+                limit: newLimit,
+                percentUsed: newLimit > 0 ? newCurrent / newLimit : 0,
+                baseCurrent: refreshData.usage.baseCurrent ?? account.usage.baseCurrent,
+                baseLimit: refreshData.usage.baseLimit ?? account.usage.baseLimit,
+                freeTrialCurrent:
+                  refreshData.usage.freeTrialCurrent ?? account.usage.freeTrialCurrent,
+                freeTrialLimit: refreshData.usage.freeTrialLimit ?? account.usage.freeTrialLimit,
+                freeTrialExpiry: refreshData.usage.freeTrialExpiry ?? account.usage.freeTrialExpiry,
+                bonuses: refreshData.usage.bonuses ?? account.usage.bonuses,
+                nextResetDate: refreshData.usage.nextResetDate ?? account.usage.nextResetDate,
+                resourceDetail: refreshData.usage.resourceDetail ?? account.usage.resourceDetail,
+                lastUpdated: now
+              }
+            })()
+          : account.usage,
+        subscription: refreshData?.subscription
+          ? {
+              ...account.subscription,
+              type:
+                (refreshData.subscription.type as SubscriptionType) || account.subscription.type,
+              title: refreshData.subscription.title || account.subscription.title,
+              daysRemaining:
+                refreshData.subscription.daysRemaining ?? account.subscription.daysRemaining,
+              expiresAt: refreshData.subscription.expiresAt ?? account.subscription.expiresAt,
+              overageCapability:
+                refreshData.subscription.overageCapability ??
+                account.subscription.overageCapability,
+              upgradeCapability:
+                refreshData.subscription.upgradeCapability ??
+                account.subscription.upgradeCapability,
+              managementTarget:
+                refreshData.subscription.subscriptionManagementTarget ??
+                account.subscription.managementTarget
+            }
+          : account.subscription,
         email: refreshData?.userInfo?.email || account.email,
         userId: refreshData?.userInfo?.userId || account.userId,
         status: newStatus,
@@ -2468,7 +2616,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       // 如果是当前激活账号，自动切换
       if (bannedAccount.isActive) {
         const available = Array.from(get().accounts.values()).find(
-          a => a.id !== id && !isBannedAccountError(a.lastError)
+          (a) => a.id !== id && !isBannedAccountError(a.lastError)
         )
         if (available) {
           get().setActiveAccount(available.id)
@@ -2479,21 +2627,19 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     }
   },
 
-  // 处理后台检查结果（兼容入口；高频场景请走 applyBackgroundCheckResults 批量）
-  handleBackgroundCheckResult: (data) => {
-    get().applyBackgroundCheckResults([data])
-  },
+  // 处理后台检查结果（由 App.tsx 调用）
+  handleBackgroundCheckResult: (data: {
+    id: string
+    success: boolean
+    data?: unknown
+    error?: string
+  }) => {
+    const { id, success, data: resultData, error } = data
 
-  // 批量处理后台检查结果：合并 N 条结果到一次 set
-  applyBackgroundCheckResults: (items) => {
-    if (!items || items.length === 0) return
-
-    set((state) => {
-      const accounts = new Map(state.accounts)
-      const now = Date.now()
-
-      for (const data of items) {
-        const { id, success, data: resultData, error } = data
+    if (!success) {
+      console.log(`[BackgroundCheck] Account ${id} check failed:`, error)
+      set((state) => {
+        const accounts = new Map(state.accounts)
         const account = accounts.get(id)
         if (!account) continue
 
@@ -2507,34 +2653,58 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           continue
         }
 
-        const checkData = resultData as {
-        usage?: {
-          current?: number
-          limit?: number
-          baseCurrent?: number
-          baseLimit?: number
-          freeTrialCurrent?: number
-          freeTrialLimit?: number
-          freeTrialExpiry?: string
-          bonuses?: Array<{ code: string; name: string; current: number; limit: number; expiresAt?: string }>
-          nextResetDate?: string
-          resourceDetail?: {
-            displayName?: string
-            displayNamePlural?: string
-            resourceType?: string
-            currency?: string
-            unit?: string
-            overageRate?: number
-            overageCap?: number
-            overageEnabled?: boolean
+    // 更新账号状态
+    set((state) => {
+      const accounts = new Map(state.accounts)
+      const account = accounts.get(id)
+
+      if (!account) return state
+
+      const now = Date.now()
+      const checkData = resultData as
+        | {
+            usage?: {
+              current?: number
+              limit?: number
+              baseCurrent?: number
+              baseLimit?: number
+              freeTrialCurrent?: number
+              freeTrialLimit?: number
+              freeTrialExpiry?: string
+              bonuses?: Array<{
+                code: string
+                name: string
+                current: number
+                limit: number
+                expiresAt?: string
+              }>
+              nextResetDate?: string
+              resourceDetail?: {
+                displayName?: string
+                displayNamePlural?: string
+                resourceType?: string
+                currency?: string
+                unit?: string
+                overageRate?: number
+                overageCap?: number
+                overageEnabled?: boolean
+              }
+            }
+            subscription?: {
+              type?: string
+              title?: string
+              daysRemaining?: number
+              expiresAt?: number
+              overageCapability?: string
+              upgradeCapability?: string
+              subscriptionManagementTarget?: string
+            }
+            userInfo?: { email?: string; userId?: string }
+            status?: string
+            errorMessage?: string
+            needsRefresh?: boolean
           }
-        }
-        subscription?: { type?: string; title?: string; daysRemaining?: number; expiresAt?: number; overageCapability?: string; upgradeCapability?: string; subscriptionManagementTarget?: string }
-        userInfo?: { email?: string; userId?: string }
-        status?: string
-        errorMessage?: string
-        needsRefresh?: boolean
-      } | undefined
+        | undefined
 
       // 检测状态
       let newStatus: AccountStatus = 'active'
@@ -2547,35 +2717,47 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
       accounts.set(id, {
         ...account,
-        usage: checkData?.usage ? (() => {
-          const newCurrent = checkData.usage.current ?? account.usage.current
-          const newLimit = checkData.usage.limit ?? account.usage.limit
-          return {
-            ...account.usage,
-            current: newCurrent,
-            limit: newLimit,
-            percentUsed: newLimit > 0 ? newCurrent / newLimit : 0,
-            baseCurrent: checkData.usage.baseCurrent ?? account.usage.baseCurrent,
-            baseLimit: checkData.usage.baseLimit ?? account.usage.baseLimit,
-            freeTrialCurrent: checkData.usage.freeTrialCurrent ?? account.usage.freeTrialCurrent,
-            freeTrialLimit: checkData.usage.freeTrialLimit ?? account.usage.freeTrialLimit,
-            freeTrialExpiry: checkData.usage.freeTrialExpiry ?? account.usage.freeTrialExpiry,
-            bonuses: checkData.usage.bonuses ?? account.usage.bonuses,
-            nextResetDate: checkData.usage.nextResetDate ?? account.usage.nextResetDate,
-            resourceDetail: checkData.usage.resourceDetail ?? account.usage.resourceDetail,
-            lastUpdated: now
-          }
-        })() : account.usage,
-        subscription: checkData?.subscription ? {
-          ...account.subscription,
-          type: (checkData.subscription.type as 'Free' | 'Pro' | 'Enterprise' | 'Teams') ?? account.subscription.type,
-          title: checkData.subscription.title ?? account.subscription.title,
-          daysRemaining: checkData.subscription.daysRemaining ?? account.subscription.daysRemaining,
-          expiresAt: checkData.subscription.expiresAt ?? account.subscription.expiresAt,
-          overageCapability: checkData.subscription.overageCapability ?? account.subscription.overageCapability,
-          upgradeCapability: checkData.subscription.upgradeCapability ?? account.subscription.upgradeCapability,
-          managementTarget: checkData.subscription.subscriptionManagementTarget ?? account.subscription.managementTarget
-        } : account.subscription,
+        usage: checkData?.usage
+          ? (() => {
+              const newCurrent = checkData.usage.current ?? account.usage.current
+              const newLimit = checkData.usage.limit ?? account.usage.limit
+              return {
+                ...account.usage,
+                current: newCurrent,
+                limit: newLimit,
+                percentUsed: newLimit > 0 ? newCurrent / newLimit : 0,
+                baseCurrent: checkData.usage.baseCurrent ?? account.usage.baseCurrent,
+                baseLimit: checkData.usage.baseLimit ?? account.usage.baseLimit,
+                freeTrialCurrent:
+                  checkData.usage.freeTrialCurrent ?? account.usage.freeTrialCurrent,
+                freeTrialLimit: checkData.usage.freeTrialLimit ?? account.usage.freeTrialLimit,
+                freeTrialExpiry: checkData.usage.freeTrialExpiry ?? account.usage.freeTrialExpiry,
+                bonuses: checkData.usage.bonuses ?? account.usage.bonuses,
+                nextResetDate: checkData.usage.nextResetDate ?? account.usage.nextResetDate,
+                resourceDetail: checkData.usage.resourceDetail ?? account.usage.resourceDetail,
+                lastUpdated: now
+              }
+            })()
+          : account.usage,
+        subscription: checkData?.subscription
+          ? {
+              ...account.subscription,
+              type:
+                (checkData.subscription.type as 'Free' | 'Pro' | 'Enterprise' | 'Teams') ??
+                account.subscription.type,
+              title: checkData.subscription.title ?? account.subscription.title,
+              daysRemaining:
+                checkData.subscription.daysRemaining ?? account.subscription.daysRemaining,
+              expiresAt: checkData.subscription.expiresAt ?? account.subscription.expiresAt,
+              overageCapability:
+                checkData.subscription.overageCapability ?? account.subscription.overageCapability,
+              upgradeCapability:
+                checkData.subscription.upgradeCapability ?? account.subscription.upgradeCapability,
+              managementTarget:
+                checkData.subscription.subscriptionManagementTarget ??
+                account.subscription.managementTarget
+            }
+          : account.subscription,
         email: checkData?.userInfo?.email || account.email,
         userId: checkData?.userInfo?.userId || account.userId,
         status: newStatus,
@@ -2601,7 +2783,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       // 如果是当前激活账号，自动切换
       if (bannedAccount.isActive) {
         const available = Array.from(get().accounts.values()).find(
-          a => a.id !== id && !isBannedAccountError(a.lastError)
+          (a) => a.id !== id && !isBannedAccountError(a.lastError)
         )
         if (available) {
           get().setActiveAccount(available.id)
@@ -2637,7 +2819,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     // 设置定时保存
     autoSaveTimer = setInterval(async () => {
       const currentHash = computeHash()
-      
+
       // 只有数据变化时才保存
       if (currentHash !== lastSaveHash) {
         console.log('[AutoSave] Data changed, saving...')
@@ -2672,7 +2854,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       const result = await window.api.machineIdGetCurrent()
       if (result.success && result.machineId) {
         set({ currentMachineId: result.machineId })
-        
+
         // 首次获取时自动备份原始机器码
         const { originalMachineId } = get()
         if (!originalMachineId) {
@@ -2686,18 +2868,18 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   changeMachineId: async (newMachineId) => {
     const state = get()
-    
+
     // 首次更改时备份原始机器码
     if (!state.originalMachineId) {
       state.backupOriginalMachineId()
     }
 
     // 生成新机器码（如果未提供）
-    const machineIdToSet = newMachineId || await window.api.machineIdGenerateRandom()
-    
+    const machineIdToSet = newMachineId || (await window.api.machineIdGenerateRandom())
+
     try {
       const result = await window.api.machineIdSet(machineIdToSet)
-      
+
       if (result.success) {
         // 更新状态
         set((s) => ({
@@ -2729,7 +2911,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   restoreOriginalMachineId: async () => {
     const { originalMachineId } = get()
-    
+
     if (!originalMachineId) {
       console.warn('[MachineId] No original machine ID to restore')
       return false
@@ -2737,7 +2919,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     try {
       const result = await window.api.machineIdSet(originalMachineId)
-      
+
       if (result.success) {
         set((s) => ({
           currentMachineId: originalMachineId,
@@ -2794,14 +2976,14 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   backupOriginalMachineId: () => {
     const { currentMachineId, originalMachineId } = get()
-    
+
     // 只有在没有备份且有当前机器码时才备份
     if (!originalMachineId && currentMachineId) {
       set({
         originalMachineId: currentMachineId,
         originalBackupTime: Date.now()
       })
-      
+
       // 添加历史记录
       set((s) => ({
         machineIdHistory: [
@@ -2814,7 +2996,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           }
         ]
       }))
-      
+
       get().saveToStorage()
       console.log('[MachineId] Original machine ID backed up:', currentMachineId)
     }

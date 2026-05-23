@@ -1249,13 +1249,23 @@ export class ProxyServer {
         console.error(
           `[ProxyServer] Token refresh failed for ${account.email || account.id}: ${result.error}`
         )
-        this.accountPool.markNeedsRefresh(account.id)
+        if (this.isSuspendedError(String(result.error || ''))) {
+          const suspendedAccount = this.accountPool.markSuspended(account.id)
+          if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
+        } else {
+          this.accountPool.markNeedsRefresh(account.id)
+        }
         return false
       }
     } catch (error) {
       if (this.isAbortError(error, signal)) throw error
       console.error(`[ProxyServer] Token refresh error for ${account.email || account.id}:`, error)
-      this.accountPool.markNeedsRefresh(account.id)
+      if (this.isSuspendedError(error instanceof Error ? error.message : String(error))) {
+        const suspendedAccount = this.accountPool.markSuspended(account.id)
+        if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
+      } else {
+        this.accountPool.markNeedsRefresh(account.id)
+      }
       return false
     } finally {
       this.refreshingTokens.delete(account.id)
@@ -1348,34 +1358,35 @@ export class ProxyServer {
             account = nextAccount
           }
         }
+        if (account && this.accountPool.isSuspended(account.id)) {
+          console.log(
+            `[ProxyServer] Selected account ${account.email || account.id} is suspended, trying another account`
+          )
+          account = this.accountPool.getNextAvailableAccount(account.id)
+        }
         if (!account) {
           console.log(
-            `[ProxyServer] Selected account ${this.config.selectedAccountIds[0]} not found, using first available`
+            `[ProxyServer] Selected account ${this.config.selectedAccountIds[0]} not found/unavailable, using first available`
           )
-          const allAccounts = this.accountPool.getAllAccounts()
-          account = allAccounts.length > 0 ? allAccounts[0] : null
+          account = this.accountPool.getNextAccount()
         }
       } else {
         // 没有指定账号，使用第一个可用账号
-        const allAccounts = this.accountPool.getAllAccounts()
-        account = allAccounts.length > 0 ? allAccounts[0] : null
+        account = this.accountPool.getNextAccount()
       }
     }
 
     if (!account) return null
 
-    // 自动切换 K-Proxy 设备 ID（如果 K-Proxy 服务可用）
-    this.syncKProxyDeviceId(account)
-
     // 检查是否需要刷新 Token
     if (this.isTokenExpiringSoon(account)) {
       const refreshed = await this.refreshToken(account, signal)
       if (!refreshed) {
-        // 刷新失败，如果启用多账号才尝试获取下一个账号
-        if (this.config.enableMultiAccount) {
-          return this.accountPool.getNextAccount()
-        }
-        return null
+        // 刷新失败时尝试获取下一个账号，避免把认证/封禁错误直接返回给客户端
+        return (
+          this.accountPool.getNextAccount(new Set([account.id])) ||
+          this.accountPool.getNextAccount()
+        )
       }
       // 返回更新后的账号
       const refreshedAccount = this.accountPool.getAccount(account.id)
@@ -1432,7 +1443,11 @@ export class ProxyServer {
     _path: string,
     signal?: AbortSignal
   ): Promise<{ result: T; account: ProxyAccount }> {
-    const maxRetries = this.config.maxRetries || 3
+    const configuredMaxRetries = this.config.maxRetries || 3
+    // Allow quota/account failover to try every account (and both endpoints) even when
+    // the user configured a small retry count. Otherwise a 402 on one account can
+    // exhaust retries before the pool has a chance to continue with another account.
+    const maxRetries = Math.max(configuredMaxRetries, Math.max(1, this.accountPool.size + 1) * 2)
     const retryDelay = this.config.retryDelayMs || 1000
     let lastError: Error | null = null
     let currentAccount = account
@@ -1442,6 +1457,7 @@ export class ProxyServer {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       this.throwIfAborted(signal)
       try {
+        this.syncKProxyDeviceId(currentAccount)
         const result = await apiCall(currentAccount, endpointIndex)
         return { result, account: currentAccount }
       } catch (error) {
@@ -1453,32 +1469,34 @@ export class ProxyServer {
           `[ProxyServer] API call failed (attempt ${attempt + 1}/${maxRetries}): ${errMsg}`
         )
 
+        // Suspended/locked accounts: remove from pool and fail over immediately.
+        // This must run before the generic auth handling because 403 suspension is not
+        // recoverable by token refresh and should not stop the request while other
+        // accounts are available.
+        if (this.isSuspendedError(errMsg)) {
+          console.log(
+            `[ProxyServer] Account ${currentAccount.email || currentAccount.id} is suspended/locked, removing and switching account`
+          )
+          triedAccounts.add(currentAccount.id)
+          const suspendedAccount = this.accountPool.markSuspended(currentAccount.id)
+          this.events.onAccountUpdate?.(
+            suspendedAccount || {
+              ...currentAccount,
+              suspended: true,
+              isAvailable: false
+            }
+          )
+          const nextAccount = this.accountPool.getNextAccount(triedAccounts)
+          if (nextAccount && nextAccount.id !== currentAccount.id) {
+            currentAccount = nextAccount
+            endpointIndex = 0
+            continue
+          }
+          break
+        }
+
         // 401/403: 尝试刷新 Token
         if (errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('Auth')) {
-          // 检测账号封禁（suspended）— 刷新 token 也无法解决
-          if (
-            errMsg.includes('suspended') ||
-            errMsg.includes('locked') ||
-            errMsg.includes('Suspended') ||
-            errMsg.includes('Locked')
-          ) {
-            console.log(
-              `[ProxyServer] Account ${currentAccount.email || currentAccount.id} is suspended, removing from active rotation`
-            )
-            triedAccounts.add(currentAccount.id)
-            this.accountPool.markSuspended(currentAccount.id)
-            this.events.onAccountUpdate?.(
-              this.accountPool.getAccount(currentAccount.id) || currentAccount
-            )
-            if (this.config.enableMultiAccount) {
-              const nextAccount = this.accountPool.getNextAccount(triedAccounts)
-              if (nextAccount && nextAccount.id !== currentAccount.id) {
-                currentAccount = nextAccount
-                continue
-              }
-            }
-            break
-          }
           console.log('[ProxyServer] Auth error, attempting token refresh')
           const refreshed = await this.refreshToken(currentAccount, signal)
           if (refreshed) {
@@ -1489,29 +1507,25 @@ export class ProxyServer {
                 `[ProxyServer] Account ${currentAccount.email || currentAccount.id} still suspended after refresh`
               )
               triedAccounts.add(currentAccount.id)
-              if (this.config.enableMultiAccount) {
-                const nextAccount = this.accountPool.getNextAccount(triedAccounts)
-                if (nextAccount && nextAccount.id !== currentAccount.id) {
-                  currentAccount = nextAccount
-                  continue
-                }
+              const nextAccount = this.accountPool.getNextAccount(triedAccounts)
+              if (nextAccount && nextAccount.id !== currentAccount.id) {
+                currentAccount = nextAccount
+                continue
               }
               break
             }
             continue
           }
-          // 刷新失败，只在启用多账号时切换账号
-          if (this.config.enableMultiAccount) {
-            triedAccounts.add(currentAccount.id)
-            const nextAccount = this.accountPool.getNextAccount(triedAccounts)
-            if (nextAccount && nextAccount.id !== currentAccount.id) {
-              currentAccount = nextAccount
-              continue
-            }
+          // 刷新失败时尝试切换账号，避免把认证错误直接返回给客户端
+          triedAccounts.add(currentAccount.id)
+          const nextAccount = this.accountPool.getNextAccount(triedAccounts)
+          if (nextAccount && nextAccount.id !== currentAccount.id) {
+            currentAccount = nextAccount
+            continue
           }
         }
 
-        // 402/429: 额度耗尽，切换端点或账号
+        // 402/429: 额度耗尽/限流，立即切换账号继续请求（不要当作 suspended）
         if (
           errMsg.includes('402') ||
           errMsg.includes('429') ||
@@ -1522,32 +1536,38 @@ export class ProxyServer {
           errMsg.includes('limit exceeded') ||
           errMsg.includes('rate limit')
         ) {
-          console.log('[ProxyServer] Quota/throttle error, switching endpoint or account')
-          this.accountPool.recordError(currentAccount.id, ErrorType.RECOVERABLE, 429)
-          endpointIndex = (endpointIndex + 1) % 2 // 切换端点
-          if (endpointIndex === 0) {
-            // 已尝试所有端点，检查是否需要切换账号
-            if (this.config.enableMultiAccount) {
-              // 多账号模式：切换到下一个账号
-              triedAccounts.add(currentAccount.id)
-              const nextAccount = this.accountPool.getNextAccount(triedAccounts)
-              if (nextAccount && nextAccount.id !== currentAccount.id) {
-                currentAccount = nextAccount
-              }
-            } else if (this.config.autoSwitchOnQuotaExhausted) {
-              // 单账号模式 + 启用自动切换：切换到下一个可用账号
-              const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
-              if (nextAccount && nextAccount.id !== currentAccount.id) {
-                console.log(
-                  `[ProxyServer] Auto-switching from ${currentAccount.id} to ${nextAccount.id} due to quota exhausted`
-                )
-                currentAccount = nextAccount
-                // 更新配置中的选定账号
-                this.config.selectedAccountIds = [nextAccount.id]
-                this.events.onAccountUpdate?.(nextAccount)
-              }
+          const statusCode =
+            errMsg.includes('402') || errMsg.includes('reached the limit') ? 402 : 429
+          console.log(
+            `[ProxyServer] Quota/throttle error (${statusCode}) for ${currentAccount.email || currentAccount.id}, switching account`
+          )
+          this.accountPool.recordError(currentAccount.id, ErrorType.RECOVERABLE, statusCode)
+          triedAccounts.add(currentAccount.id)
+
+          // Prefer another account over retrying a different endpoint for an exhausted account.
+          if (this.config.enableMultiAccount) {
+            const nextAccount = this.accountPool.getNextAccount(triedAccounts)
+            if (nextAccount && nextAccount.id !== currentAccount.id) {
+              currentAccount = nextAccount
+              endpointIndex = 0
+              continue
+            }
+          } else if (this.config.autoSwitchOnQuotaExhausted) {
+            const nextAccount = this.accountPool.getNextAvailableAccount(currentAccount.id)
+            if (nextAccount && nextAccount.id !== currentAccount.id) {
+              console.log(
+                `[ProxyServer] Auto-switching from ${currentAccount.id} to ${nextAccount.id} due to quota exhausted`
+              )
+              currentAccount = nextAccount
+              endpointIndex = 0
+              this.config.selectedAccountIds = [nextAccount.id]
+              this.events.onAccountUpdate?.(nextAccount)
+              continue
             }
           }
+
+          // No alternate account is currently available; try the other endpoint before giving up.
+          endpointIndex = (endpointIndex + 1) % 2
           continue
         }
 
@@ -3214,7 +3234,8 @@ export class ProxyServer {
     headersSent: boolean = false,
     matchedApiKey?: import('./types').ApiKey,
     toolNameRegistry: ToolNameRegistry = new ToolNameRegistry(),
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    triedAccounts: Set<string> = new Set()
   ): Promise<void> {
     if (!headersSent) {
       res.writeHead(200, {
@@ -3417,7 +3438,8 @@ export class ProxyServer {
                 true,
                 matchedApiKey,
                 toolNameRegistry,
-                signal
+                signal,
+                triedAccounts
               )
             } catch (error) {
               if (this.isAbortError(error, signal) || this.isResponseClosed(res)) {
@@ -3456,22 +3478,55 @@ export class ProxyServer {
             resolve()
           }
         },
-        (error) => {
+        async (error) => {
           if (this.isAbortError(error, signal) || this.isResponseClosed(res)) {
             resolve()
             return
           }
           console.error('[ProxyServer] Stream error:', error)
+
+          const isSuspendedError = this.isSuspendedError(error.message)
+          if (isSuspendedError) {
+            const suspendedAccount = this.accountPool.markSuspended(account.id)
+            if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
+          } else {
+            const errStatusCode = error.message.match(/(\d{3})/)?.[1]
+            this.accountPool.recordError(
+              account.id,
+              errStatusCode ? classifyError(parseInt(errStatusCode)) : ErrorType.RECOVERABLE,
+              errStatusCode ? parseInt(errStatusCode) : undefined
+            )
+          }
+
+          // The SSE headers/initial role chunk may already be sent, but if no model
+          // content/tool call has been emitted yet we can continue the same stream with
+          // another account instead of surfacing the suspension error to the client.
+          if (collectedContent.length === 0 && pendingToolCalls.size === 0) {
+            triedAccounts.add(account.id)
+            const nextAccount = this.accountPool.getNextAccount(triedAccounts)
+            if (nextAccount && nextAccount.id !== account.id) {
+              await this.handleOpenAIStream(
+                res,
+                nextAccount,
+                kiroPayload,
+                model,
+                startTime,
+                currentRound,
+                id,
+                true,
+                matchedApiKey,
+                toolNameRegistry,
+                signal,
+                triedAccounts
+              )
+              resolve()
+              return
+            }
+          }
+
           res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`)
           res.end()
-
           this.recordRequestFailed()
-          const errStatusCode = error.message.match(/(\d{3})/)?.[1]
-          this.accountPool.recordError(
-            account.id,
-            errStatusCode ? classifyError(parseInt(errStatusCode)) : ErrorType.RECOVERABLE,
-            errStatusCode ? parseInt(errStatusCode) : undefined
-          )
           this.events.onResponse?.({
             path: '/v1/chat/completions',
             model,
@@ -3589,6 +3644,7 @@ export class ProxyServer {
     try {
       const toolNameRegistry = new ToolNameRegistry()
 
+      this.syncKProxyDeviceId(account)
       const kiroPayload = claudeToKiro(processedRequest, account.profileArn, toolNameRegistry)
 
       // 构建 prompt cache profile（用于模拟缓存 usage）
@@ -3794,6 +3850,7 @@ export class ProxyServer {
     const estimatedInputTokens = Math.max(1, Math.round(JSON.stringify(kiroPayload).length / 3))
 
     return new Promise((resolve) => {
+      this.syncKProxyDeviceId(account as ProxyAccount)
       callKiroApiStream(
         account as any,
         kiroPayload,
@@ -4131,27 +4188,21 @@ export class ProxyServer {
           }
           console.error('[ProxyServer] Stream error:', error)
           const errStatusCode2 = error.message.match(/(\d{3})/)?.[1]
-          const isSuspendedError =
-            error.message.includes('suspended') ||
-            error.message.includes('locked') ||
-            error.message.includes('Suspended') ||
-            error.message.includes('Locked')
+          const isSuspendedError = this.isSuspendedError(error.message)
 
           if (isSuspendedError) {
-            this.accountPool.markSuspended(account.id)
-            const updatedAccount = this.accountPool.getAccount(account.id)
-            if (updatedAccount) this.events.onAccountUpdate?.(updatedAccount)
+            const suspendedAccount = this.accountPool.markSuspended(account.id)
+            if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
           }
-          this.accountPool.recordError(
-            account.id,
-            errStatusCode2 ? classifyError(parseInt(errStatusCode2)) : ErrorType.RECOVERABLE,
-            errStatusCode2 ? parseInt(errStatusCode2) : undefined
-          )
+          if (!isSuspendedError)
+            this.accountPool.recordError(
+              account.id,
+              errStatusCode2 ? classifyError(parseInt(errStatusCode2)) : ErrorType.RECOVERABLE,
+              errStatusCode2 ? parseInt(errStatusCode2) : undefined
+            )
 
           triedAccounts.add(account.id)
-          const nextAccount = this.config.enableMultiAccount
-            ? this.accountPool.getNextAccount(triedAccounts)
-            : null
+          const nextAccount = this.accountPool.getNextAccount(triedAccounts)
           if (nextAccount && nextAccount.id !== account.id) {
             const nextPayload = {
               ...kiroPayload,
@@ -4217,20 +4268,12 @@ export class ProxyServer {
         this.config.preferredEndpoint
       ).catch(async (error) => {
         if (!this.isAbortError(error, signal) && !this.isResponseClosed(res)) {
-          if (
-            error.message.includes('suspended') ||
-            error.message.includes('locked') ||
-            error.message.includes('Suspended') ||
-            error.message.includes('Locked')
-          ) {
-            this.accountPool.markSuspended(account.id)
-            const updatedAccount = this.accountPool.getAccount(account.id)
-            if (updatedAccount) this.events.onAccountUpdate?.(updatedAccount)
+          if (this.isSuspendedError(error.message)) {
+            const suspendedAccount = this.accountPool.markSuspended(account.id)
+            if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
           }
           triedAccounts.add(account.id)
-          const nextAccount = this.config.enableMultiAccount
-            ? this.accountPool.getNextAccount(triedAccounts)
-            : null
+          const nextAccount = this.accountPool.getNextAccount(triedAccounts)
           if (nextAccount && nextAccount.id !== account.id) {
             const nextPayload = {
               ...kiroPayload,
@@ -4278,6 +4321,19 @@ export class ProxyServer {
     })
   }
 
+  private isSuspendedError(message: string): boolean {
+    const lower = message.toLowerCase()
+    return (
+      lower.includes('accountsuspended') ||
+      lower.includes('suspended') ||
+      lower.includes('locked') ||
+      lower.includes('temporarily_suspended') ||
+      lower.includes('temporarily suspended') ||
+      lower.includes('temporarily is suspended') ||
+      lower.includes('security precaution')
+    )
+  }
+
   // 处理 API 错误
   private handleApiError(
     res: http.ServerResponse,
@@ -4299,16 +4355,9 @@ export class ProxyServer {
       error.message.includes('Auth')
 
     // 检测账号封禁
-    if (
-      isAuthError &&
-      (error.message.includes('suspended') ||
-        error.message.includes('locked') ||
-        error.message.includes('Suspended') ||
-        error.message.includes('Locked'))
-    ) {
-      this.accountPool.markSuspended(account.id)
-      const updatedAccount = this.accountPool.getAccount(account.id)
-      if (updatedAccount) this.events.onAccountUpdate?.(updatedAccount)
+    if (isAuthError && this.isSuspendedError(error.message)) {
+      const suspendedAccount = this.accountPool.markSuspended(account.id)
+      if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
     }
 
     this.accountPool.recordError(account.id, errorType, parsedCode)

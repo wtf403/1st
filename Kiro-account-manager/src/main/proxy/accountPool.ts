@@ -72,12 +72,20 @@ export class AccountPool {
 
   // 添加账号
   addAccount(account: ProxyAccount): void {
+    // Suspended/locked accounts should not remain in the active account pool.
+    // If a suspended account is synced from UI/store, remove any existing pool entry
+    // instead of keeping it as an unavailable candidate.
+    if (account.suspended) {
+      this.removeAccount(account.id)
+      console.log(`[AccountPool] Skipped suspended account: ${account.email || account.id}`)
+      return
+    }
+
     const existing = this.accounts.get(account.id)
-    const suspended = existing?.suspended === true || account.suspended === true
     this.accounts.set(account.id, {
       ...account,
-      suspended,
-      isAvailable: suspended ? false : account.isAvailable !== false,
+      suspended: false,
+      isAvailable: account.isAvailable !== false,
       requestCount: existing?.requestCount || account.requestCount || 0,
       errorCount: existing?.errorCount || account.errorCount || 0,
       lastUsed: existing?.lastUsed || account.lastUsed || 0
@@ -117,10 +125,10 @@ export class AccountPool {
       return null
     }
 
-    // 单账号特殊处理：绕过断路器，直接返回（让用户看到真实 API 错误）
+    // 单账号特殊处理：绕过断路器，但绝不返回已封禁/冻结的账号
     if (accountList.length === 1) {
       const account = accountList[0]
-      if (excludeIds?.has(account.id)) return null
+      if (excludeIds?.has(account.id) || account.suspended) return null
       return account
     }
 
@@ -190,16 +198,22 @@ export class AccountPool {
     return Array.from(this.accounts.values())
   }
 
-  // 标记账号为封禁/冻结
-  markSuspended(accountId: string): void {
+  // 标记账号为封禁/冻结，并从账号池移除
+  markSuspended(accountId: string): ProxyAccount | null {
     const account = this.accounts.get(accountId)
-    if (!account) return
-    console.log(`[AccountPool] Account ${account.email || accountId} marked as suspended`)
-    this.accounts.set(accountId, {
+    if (!account) return null
+
+    const suspendedAccount = {
       ...account,
       suspended: true,
       isAvailable: false
-    })
+    }
+
+    console.log(
+      `[AccountPool] Account ${account.email || accountId} marked as suspended and removed`
+    )
+    this.removeAccount(accountId)
+    return suspendedAccount
   }
 
   // 检查账号是否被封禁/冻结

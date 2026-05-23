@@ -39,6 +39,8 @@ export function extractCode(body: string): string {
 
 export interface TempEmailService {
   create(): Promise<string>
+  /** Optional hook called immediately before the registration page requests an OTP. */
+  beforeSendCode?(): Promise<void>
   waitForCode(timeoutSec: number, intervalSec: number): Promise<string>
   getAddress(): string
 }
@@ -729,6 +731,7 @@ export class DuckDuckGoEmailService implements TempEmailService {
   private readonly authToken: string // Bearer token from DDG account
   private readonly gmailAccount: GmailIMAPAccount
   private address = ''
+  private baselineAwsUid = '0'
   //private generatedUsername = ''
 
   constructor(authToken: string, gmailAccount: GmailIMAPAccount) {
@@ -770,10 +773,26 @@ export class DuckDuckGoEmailService implements TempEmailService {
     return this.address
   }
 
+  async beforeSendCode(): Promise<void> {
+    // Capture a Gmail baseline before AWS sends the verification email. On fast
+    // hosts the mail can arrive before waitForCode() starts; using a post-send
+    // INBOX count can then skip the real OTP and time out.
+    try {
+      const service = new GmailIMAPService(this.gmailAccount, this.address)
+      this.baselineAwsUid = await service.getLatestAwsUid()
+      console.log(`[DDG] Baseline AWS mail UID before OTP send: ${this.baselineAwsUid}`)
+    } catch (err) {
+      console.log(
+        `[DDG] Failed to capture AWS mail UID baseline (will use 0): ${err instanceof Error ? err.message : String(err)}`
+      )
+      this.baselineAwsUid = '0'
+    }
+  }
+
   async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
     if (!this.address) throw new Error('Address not created yet')
     // DDG forwards to Gmail — poll Gmail IMAP for the forwarded mail
-    const service = new GmailIMAPService(this.gmailAccount, this.address)
+    const service = new GmailIMAPService(this.gmailAccount, this.address, this.baselineAwsUid)
     return service.waitForCode(timeoutSec, intervalSec)
   }
 }
@@ -782,24 +801,21 @@ export class DuckDuckGoEmailService implements TempEmailService {
 
 class GmailIMAPService {
   private readonly account: GmailIMAPAccount
+  private readonly filterForAddress: string
+  private readonly baselineAwsUid: string
 
-  constructor(account: GmailIMAPAccount, _filterForAddress: string) {
+  constructor(account: GmailIMAPAccount, filterForAddress: string, baselineAwsUid = '0') {
     this.account = account
+    this.filterForAddress = filterForAddress.toLowerCase()
+    this.baselineAwsUid = baselineAwsUid
   }
 
   async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
     const maxRetries = Math.floor(timeoutSec / intervalSec)
     const checkedUids = new Set<string>()
 
-    let beforeCount = 0
-    try {
-      beforeCount = await this.getMessageCount()
-      console.log(`[Gmail IMAP] Messages before: ${beforeCount}`)
-    } catch (err) {
-      console.log(
-        `[Gmail IMAP] getMessageCount failed (will use 0): ${err instanceof Error ? err.message : String(err)}`
-      )
-    }
+    const baselineUidNum = Number.parseInt(this.baselineAwsUid || '0', 10) || 0
+    console.log(`[Gmail IMAP] Waiting for AWS OTP after UID ${baselineUidNum}`)
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       await sleep(intervalSec * 1000)
@@ -814,28 +830,39 @@ class GmailIMAPService {
         }
         await client.selectInbox()
 
-        // Search for emails from AWS signin sender received after we started
-        const uids = await client.searchFrom('no-reply@signin.aws', beforeCount)
-        console.log(`[Gmail IMAP] [${attempt}/${maxRetries}] AWS sender UIDs: [${uids.join(',')}]`)
+        // Search for AWS signin mails with UID greater than the pre-send baseline.
+        const uids = await client.searchFromUid('no-reply@signin.aws', String(baselineUidNum + 1))
+        const sortedUids = uids.sort((a, b) => Number.parseInt(b, 10) - Number.parseInt(a, 10))
+        console.log(
+          `[Gmail IMAP] [${attempt}/${maxRetries}] AWS sender UIDs after baseline: [${sortedUids.join(',')}]`
+        )
 
-        // Only check the NEWEST email (highest UID) — skip stale ones from previous runs
-        if (uids.length === 0) continue
-        const newestUid = uids[uids.length - 1]
-        if (checkedUids.has(newestUid)) continue
-        checkedUids.add(newestUid)
+        if (sortedUids.length === 0) continue
 
-        const body = await client.fetchBodyByUID(newestUid)
-        if (!body) continue
+        for (const uid of sortedUids.slice(0, 10)) {
+          if (checkedUids.has(uid)) continue
+          checkedUids.add(uid)
 
-        const code = extractCode(body)
-        if (code) {
-          console.log(`[Gmail IMAP] Got OTP: ${code} from UID ${newestUid}`)
-          await client.markSeen(newestUid)
-          return code
-        } else {
-          console.log(
-            `[Gmail IMAP] UID ${newestUid} from AWS but no 6-digit code found, body length: ${body.length}`
-          )
+          const body = await client.fetchBodyByUID(uid)
+          if (!body) continue
+
+          const containsAlias =
+            !this.filterForAddress || body.toLowerCase().includes(this.filterForAddress)
+          const code = extractCode(body)
+          if (code) {
+            if (!containsAlias) {
+              console.log(
+                `[Gmail IMAP] UID ${uid} has OTP but does not mention ${this.filterForAddress}; accepting because it is newer than baseline`
+              )
+            }
+            console.log(`[Gmail IMAP] Got OTP: ${code} from UID ${uid}`)
+            await client.markSeen(uid)
+            return code
+          } else {
+            console.log(
+              `[Gmail IMAP] UID ${uid} from AWS but no 6-digit code found, body length: ${body.length}, aliasMatch=${containsAlias}`
+            )
+          }
         }
       } catch (err) {
         console.log(
@@ -848,7 +875,7 @@ class GmailIMAPService {
     throw new Error(`OTP wait timed out (${timeoutSec}s)`)
   }
 
-  private async getMessageCount(): Promise<number> {
+  async getLatestAwsUid(): Promise<string> {
     const client = new GmailIMAPClient()
     try {
       await client.connect()
@@ -857,7 +884,12 @@ class GmailIMAPService {
       } else {
         await client.authenticateXOAuth2(this.account.email, this.account.accessToken)
       }
-      return await client.selectInbox()
+      await client.selectInbox()
+      const uids = await client.searchFromUid('no-reply@signin.aws', '1')
+      if (uids.length === 0) return '0'
+      return uids.reduce((max, uid) =>
+        Number.parseInt(uid, 10) > Number.parseInt(max, 10) ? uid : max
+      )
     } finally {
       client.close()
     }
@@ -996,11 +1028,9 @@ class GmailIMAPClient {
     return 0
   }
 
-  // Search by sender, optionally restricted to messages after a sequence number floor
-  async searchFrom(sender: string, afterSeq: number): Promise<string[]> {
-    // UID SEARCH FROM "sender" <seq>:* — finds messages from sender with seq >= afterSeq+1
-    const seqFloor = afterSeq + 1
-    const tag = await this.sendCommand(`UID SEARCH ${seqFloor}:* FROM "${sender}"`)
+  // Search by sender, optionally restricted to messages after a UID floor.
+  async searchFromUid(sender: string, uidStart: string): Promise<string[]> {
+    const tag = await this.sendCommand(`UID SEARCH UID ${uidStart}:* FROM "${sender}"`)
     const { lines, result } = await this.readUntilTag(tag)
     if (!result.includes('OK')) return []
     for (const line of lines) {

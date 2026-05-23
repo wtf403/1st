@@ -13,6 +13,7 @@ import {
 import { randomFullName } from './browser-identity'
 import { genPassword } from './config'
 import type { RegistrationResult, LogFn } from './registrar'
+import type { TempEmailService } from './email-service'
 
 export interface BrowserRegistrationConfig {
   useDDG?: boolean
@@ -256,7 +257,7 @@ export class BrowserRegistrar {
   private win: BrowserWindow | null = null
   private sessionPartition: string
   private aborted = false
-  private emailSvc: DuckDuckGoEmailService | TempMailPlusService | MoEmailService | null = null
+  private emailSvc: TempEmailService | null = null
 
   constructor(cfg: BrowserRegistrationConfig, log?: LogFn) {
     this.cfg = cfg
@@ -656,6 +657,12 @@ export class BrowserRegistrar {
       }
     }
 
+    // Capture email-provider baseline before this click triggers the OTP email.
+    if (this.emailSvc?.beforeSendCode) {
+      this.log('[Browser] Capturing email baseline before sending OTP')
+      await this.emailSvc.beforeSendCode()
+    }
+
     // Name page Continue: data-testid="signup-next-button"
     await clickWithCookieDismiss(win, 'button[data-testid="signup-next-button"]')
     this.log('[Browser] Clicked Continue to send OTP')
@@ -701,36 +708,101 @@ export class BrowserRegistrar {
     if (!hasPwd) return
 
     this.log('[Browser] Filling password')
-    await typeInto(win, 'input[type="password"]', password)
 
-    // Fill confirm password if second field exists
-    const hasConfirm = await win.webContents
-      .executeJavaScript(`document.querySelectorAll('input[type="password"]').length > 1`)
-      .catch(() => false)
-    if (hasConfirm) {
-      await win.webContents
-        .executeJavaScript(
-          `
-        (function() {
-          const inputs = Array.from(document.querySelectorAll('input[type="password"]'));
-          const el = inputs[1];
-          if (!el) return;
+    const fillOk = await win.webContents
+      .executeJavaScript(
+        `
+      (function() {
+        const inputs = Array.from(document.querySelectorAll('input[type="password"]'));
+        if (inputs.length === 0) return false;
+        for (const el of inputs) {
+          el.focus();
           const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
           if (setter) setter.call(el, ${JSON.stringify(password)});
           else el.value = ${JSON.stringify(password)};
-          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(password)} }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+          el.blur();
+        }
+        return true;
+      })()
+    `
+      )
+      .catch(() => false)
+
+    if (!fillOk) await typeInto(win, 'input[type="password"]', password)
+
+    await randomDelay(800, 1500)
+
+    const clicked = await this.clickPasswordContinue(win)
+    if (!clicked) {
+      const pageInfo = await win.webContents
+        .executeJavaScript(
+          `
+        (function() {
+          const url = window.location.href;
+          const inputs = Array.from(document.querySelectorAll('input')).map(el => ({
+            type: el.type,
+            placeholder: el.placeholder || '',
+            valueLength: el.value ? el.value.length : 0,
+            visible: !!el.offsetParent
+          }));
+          const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a[role="button"]')).map(el => ({
+            tag: el.tagName,
+            type: el.type || '',
+            text: (el.textContent || el.value || '').trim().slice(0, 80),
+            id: el.id,
+            classes: String(el.className).slice(0, 80),
+            dataTestid: el.getAttribute('data-testid') || '',
+            disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
+            visible: !!el.offsetParent
+          }));
+          return { url: url.slice(0, 180), inputs, buttons: buttons.slice(0, 20), body: document.body.innerText.slice(0, 500) };
         })()
       `
         )
-        .catch(() => {})
+        .catch(() => ({ url: 'unknown', buttons: [], inputs: [], body: '' }))
+      this.log(`[Browser] Password continue not clicked; page state: ${JSON.stringify(pageInfo)}`)
+      throw new Error('Password Continue button not found or disabled')
     }
 
-    await randomDelay(500, 1000)
-    // Password Continue: data-testid="test-primary-button"
-    await clickWithCookieDismiss(win, 'button[data-testid="test-primary-button"]')
     this.log('[Browser] Password submitted')
     await waitForPageLoad(win, 2000)
+  }
+
+  private async clickPasswordContinue(win: BrowserWindow): Promise<boolean> {
+    const deadline = Date.now() + 30000
+    while (Date.now() < deadline && isWindowUsable(win)) {
+      const clicked = await win.webContents
+        .executeJavaScript(
+          `
+        (function() {
+          const candidates = Array.from(document.querySelectorAll('button, input[type="submit"], a[role="button"]'));
+          const visible = candidates.filter(el => !!el.offsetParent);
+          const enabled = visible.filter(el => !el.disabled && el.getAttribute('aria-disabled') !== 'true');
+          const bySelector = enabled.find(el =>
+            el.getAttribute('data-testid') === 'test-primary-button' ||
+            el.getAttribute('data-testid') === 'signup-next-button' ||
+            el.getAttribute('data-testid') === 'password-continue-button'
+          );
+          const byText = enabled.find(el => {
+            const text = (el.textContent || el.value || '').trim().toLowerCase();
+            return text === 'continue' || text === 'next' || text.includes('continue') || text.includes('create account') || text.includes('继续') || text.includes('下一步');
+          });
+          const btn = bySelector || byText || enabled[enabled.length - 1];
+          if (!btn) return false;
+          btn.scrollIntoView({ block: 'center', inline: 'center' });
+          btn.click();
+          return true;
+        })()
+      `
+        )
+        .catch(() => false)
+      if (clicked) return true
+      await sleep(1000)
+    }
+    return false
   }
 
   /** Try multiple selectors to find and click the Allow access button */

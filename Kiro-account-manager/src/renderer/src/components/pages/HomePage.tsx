@@ -36,9 +36,7 @@ interface ProxyStatusResult {
 }
 
 function formatCurrency(value: number): string {
-  if (value === 0) return '$0.00'
-  if (value < 0.01) return `$${value.toFixed(6)}`
-  return `$${value.toFixed(4)}`
+  return `$${value.toFixed(2)}`
 }
 
 const getSubscriptionColor = (type: string, title?: string): string => {

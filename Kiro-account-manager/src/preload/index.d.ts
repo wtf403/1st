@@ -901,6 +901,20 @@ interface KiroApi {
     callback: (status: { running: boolean; port: number }) => void
   ) => () => void
 
+  // 监听反代账号状态更新事件
+  onProxyAccountUpdate: (
+    callback: (update: {
+      id: string
+      accessToken?: string
+      refreshToken?: string
+      expiresAt?: number
+      suspended?: boolean
+      isAvailable?: boolean
+      status?: string
+      lastError?: string
+    }) => void
+  ) => () => void
+
   // ============ Usage API 类型设置 ============
 
   // 获取 Usage API 类型
@@ -1260,10 +1274,31 @@ interface KiroApi {
   }) => Promise<{ success: boolean; result?: unknown; error?: string }>
 
   registrationGenerateColabProxy: (config: {
-    cdpAddress: string
+    cdpAddress?: string
     formUrl?: string
     cellSelector?: string
   }) => Promise<{ success: boolean; proxyUrl?: string; error?: string }>
+
+  registrationGetAutoReplacementConfig: () => Promise<{
+    enabled?: boolean
+    useDDG?: boolean
+    ddgAuthToken?: string
+    ddgGmailEmail?: string
+    ddgGmailAppPassword?: string
+    useTempMailPlus?: boolean
+    tempMailPlusEmail?: string
+    tempMailPlusEpin?: string
+    tempMailPlusDomain?: string
+    proxyUrl?: string
+    generateProxyEachTime?: boolean
+    proxyCdpAddress?: string
+    proxyFormUrl?: string
+    scheduledEnabled?: boolean
+    scheduledIntervalMin?: number
+    scheduledStartTime?: string
+    scheduledEndTime?: string
+    scheduledMethod?: 'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
+  }>
 
   registrationSaveAutoReplacementConfig: (config: {
     enabled?: boolean
@@ -1279,6 +1314,11 @@ interface KiroApi {
     generateProxyEachTime?: boolean
     proxyCdpAddress?: string
     proxyFormUrl?: string
+    scheduledEnabled?: boolean
+    scheduledIntervalMin?: number
+    scheduledStartTime?: string
+    scheduledEndTime?: string
+    scheduledMethod?: 'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
   }) => Promise<{ success: boolean; error?: string }>
 
   registrationCancelBrowser: (taskId?: string) => Promise<{ success: boolean }>

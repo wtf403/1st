@@ -1,9 +1,32 @@
 import { useAccountsStore } from '@/store/accounts'
-import { Card, CardContent, CardHeader, CardTitle, Button } from '../ui'
-import { Eye, EyeOff, RefreshCw, Clock, Trash2, Download, Upload, Globe, Repeat, Palette, Moon, Sun, Fingerprint, Info, ChevronDown, ChevronUp, Settings, Database, Layers, UserX, Monitor } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle, Button, Input } from '../ui'
+import {
+  Eye,
+  EyeOff,
+  RefreshCw,
+  Clock,
+  Trash2,
+  Download,
+  Upload,
+  Globe,
+  Repeat,
+  Palette,
+  Moon,
+  Sun,
+  Fingerprint,
+  Info,
+  ChevronDown,
+  ChevronUp,
+  Settings,
+  Database,
+  Layers,
+  UserX,
+  Monitor
+} from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { ExportDialog } from '../accounts/ExportDialog'
 import { useTranslation } from '@/hooks/useTranslation'
+import { TimeRangeSlider } from '../schedule/TimeRangeSlider'
 
 // 主题配置 - 按色系分组
 const themeGroupsZh = [
@@ -14,7 +37,7 @@ const themeGroupsZh = [
       { id: 'indigo', name: '靖蓝', color: '#6366f1' },
       { id: 'cyan', name: '清新青', color: '#06b6d4' },
       { id: 'sky', name: '晴空蓝', color: '#0ea5e9' },
-      { id: 'teal', name: '水鸭蓝', color: '#14b8a6' },
+      { id: 'teal', name: '水鸭蓝', color: '#14b8a6' }
     ]
   },
   {
@@ -24,7 +47,7 @@ const themeGroupsZh = [
       { id: 'violet', name: '紫罗兰', color: '#8b5cf6' },
       { id: 'fuchsia', name: '洋红', color: '#d946ef' },
       { id: 'pink', name: '粉红', color: '#ec4899' },
-      { id: 'rose', name: '玑瑰红', color: '#f43f5e' },
+      { id: 'rose', name: '玑瑰红', color: '#f43f5e' }
     ]
   },
   {
@@ -33,7 +56,7 @@ const themeGroupsZh = [
       { id: 'red', name: '热情红', color: '#ef4444' },
       { id: 'orange', name: '活力橙', color: '#f97316' },
       { id: 'amber', name: '琥珀金', color: '#f59e0b' },
-      { id: 'yellow', name: '明黄', color: '#eab308' },
+      { id: 'yellow', name: '明黄', color: '#eab308' }
     ]
   },
   {
@@ -41,7 +64,7 @@ const themeGroupsZh = [
     themes: [
       { id: 'emerald', name: '翠绿', color: '#10b981' },
       { id: 'green', name: '草绿', color: '#22c55e' },
-      { id: 'lime', name: '青柠', color: '#84cc16' },
+      { id: 'lime', name: '青柠', color: '#84cc16' }
     ]
   },
   {
@@ -50,7 +73,7 @@ const themeGroupsZh = [
       { id: 'slate', name: '石板灰', color: '#64748b' },
       { id: 'zinc', name: '锌灰', color: '#71717a' },
       { id: 'stone', name: '暖灰', color: '#78716c' },
-      { id: 'neutral', name: '中性灰', color: '#737373' },
+      { id: 'neutral', name: '中性灰', color: '#737373' }
     ]
   },
   {
@@ -89,7 +112,7 @@ const themeGroupsEn = [
       { id: 'indigo', name: 'Indigo', color: '#6366f1' },
       { id: 'cyan', name: 'Cyan', color: '#06b6d4' },
       { id: 'sky', name: 'Sky', color: '#0ea5e9' },
-      { id: 'teal', name: 'Teal', color: '#14b8a6' },
+      { id: 'teal', name: 'Teal', color: '#14b8a6' }
     ]
   },
   {
@@ -99,7 +122,7 @@ const themeGroupsEn = [
       { id: 'violet', name: 'Violet', color: '#8b5cf6' },
       { id: 'fuchsia', name: 'Fuchsia', color: '#d946ef' },
       { id: 'pink', name: 'Pink', color: '#ec4899' },
-      { id: 'rose', name: 'Rose', color: '#f43f5e' },
+      { id: 'rose', name: 'Rose', color: '#f43f5e' }
     ]
   },
   {
@@ -108,7 +131,7 @@ const themeGroupsEn = [
       { id: 'red', name: 'Red', color: '#ef4444' },
       { id: 'orange', name: 'Orange', color: '#f97316' },
       { id: 'amber', name: 'Amber', color: '#f59e0b' },
-      { id: 'yellow', name: 'Yellow', color: '#eab308' },
+      { id: 'yellow', name: 'Yellow', color: '#eab308' }
     ]
   },
   {
@@ -116,7 +139,7 @@ const themeGroupsEn = [
     themes: [
       { id: 'emerald', name: 'Emerald', color: '#10b981' },
       { id: 'green', name: 'Green', color: '#22c55e' },
-      { id: 'lime', name: 'Lime', color: '#84cc16' },
+      { id: 'lime', name: 'Lime', color: '#84cc16' }
     ]
   },
   {
@@ -125,7 +148,7 @@ const themeGroupsEn = [
       { id: 'slate', name: 'Slate', color: '#64748b' },
       { id: 'zinc', name: 'Zinc', color: '#71717a' },
       { id: 'stone', name: 'Stone', color: '#78716c' },
-      { id: 'neutral', name: 'Neutral', color: '#737373' },
+      { id: 'neutral', name: 'Neutral', color: '#737373' }
     ]
   },
   {
@@ -157,8 +180,8 @@ const themeGroupsEn = [
 ]
 
 export function SettingsPage() {
-  const { 
-    privacyMode, 
+  const {
+    privacyMode,
     setPrivacyMode,
     usagePrecision,
     setUsagePrecision,
@@ -200,7 +223,17 @@ export function SettingsPage() {
   const [tempProxyUrl, setTempProxyUrl] = useState(proxyUrl)
   const [themeExpanded, setThemeExpanded] = useState(false)
   const [isManualRefreshing, setIsManualRefreshing] = useState(false)
-  
+
+  // 定期自动注册设置状态
+  const [scheduledRegisterEnabled, setScheduledRegisterEnabled] = useState(false)
+  const [scheduledRegisterIntervalMin, setScheduledRegisterIntervalMin] = useState(30)
+  const [scheduledRegisterStartTime, setScheduledRegisterStartTime] = useState('00:00')
+  const [scheduledRegisterEndTime, setScheduledRegisterEndTime] = useState('00:00')
+  const [scheduledRegisterMethod, setScheduledRegisterMethod] = useState<
+    'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
+  >('browser-ddg')
+  const [scheduledRegisterLoading, setScheduledRegisterLoading] = useState(true)
+
   // 托盘设置状态
   const [traySettings, setTraySettings] = useState({
     enabled: true,
@@ -215,6 +248,51 @@ export function SettingsPage() {
   const [shortcutLoading, setShortcutLoading] = useState(true)
   const [shortcutError, setShortcutError] = useState('')
   const [isRecordingShortcut, setIsRecordingShortcut] = useState(false)
+
+  // 加载定期自动注册设置
+  useEffect(() => {
+    const loadScheduledRegistration = async () => {
+      try {
+        const cfg = await window.api.registrationGetAutoReplacementConfig()
+        setScheduledRegisterEnabled(!!cfg.scheduledEnabled)
+        setScheduledRegisterIntervalMin(cfg.scheduledIntervalMin || 30)
+        setScheduledRegisterStartTime(cfg.scheduledStartTime || '00:00')
+        setScheduledRegisterEndTime(cfg.scheduledEndTime || '00:00')
+        setScheduledRegisterMethod(cfg.scheduledMethod || 'browser-ddg')
+      } catch (error) {
+        console.error('Failed to load scheduled registration settings:', error)
+      } finally {
+        setScheduledRegisterLoading(false)
+      }
+    }
+    loadScheduledRegistration()
+  }, [])
+
+  const handleScheduledRegistrationChange = async (
+    enabled: boolean,
+    intervalMin = scheduledRegisterIntervalMin,
+    startTime = scheduledRegisterStartTime,
+    endTime = scheduledRegisterEndTime,
+    method = scheduledRegisterMethod
+  ) => {
+    const safeInterval = Math.max(1, Number(intervalMin) || 30)
+    setScheduledRegisterEnabled(enabled)
+    setScheduledRegisterIntervalMin(safeInterval)
+    setScheduledRegisterStartTime(startTime)
+    setScheduledRegisterEndTime(endTime)
+    setScheduledRegisterMethod(method)
+    try {
+      await window.api.registrationSaveAutoReplacementConfig({
+        scheduledEnabled: enabled,
+        scheduledIntervalMin: safeInterval,
+        scheduledStartTime: startTime,
+        scheduledEndTime: endTime,
+        scheduledMethod: method
+      })
+    } catch (error) {
+      console.error('Failed to save scheduled registration settings:', error)
+    }
+  }
 
   // 加载快捷键设置
   useEffect(() => {
@@ -249,20 +327,20 @@ export function SettingsPage() {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!isRecordingShortcut) return
     e.preventDefault()
-    
+
     const parts: string[] = []
     if (e.ctrlKey) parts.push('Ctrl')
     if (e.metaKey) parts.push('Command')
     if (e.altKey) parts.push('Alt')
     if (e.shiftKey) parts.push('Shift')
-    
+
     // 忽略单独的修饰键
     const key = e.key
     if (!['Control', 'Meta', 'Alt', 'Shift'].includes(key)) {
       // 转换特殊键名
       const keyName = key.length === 1 ? key.toUpperCase() : key
       parts.push(keyName)
-      
+
       const shortcut = parts.join('+')
       handleShortcutChange(shortcut)
       setIsRecordingShortcut(false)
@@ -343,7 +421,10 @@ export function SettingsPage() {
   }, [])
 
   // 保存托盘设置
-  const handleTraySettingChange = async (key: keyof typeof traySettings, value: boolean | string) => {
+  const handleTraySettingChange = async (
+    key: keyof typeof traySettings,
+    value: boolean | string
+  ) => {
     const newSettings = { ...traySettings, [key]: value }
     setTraySettings(newSettings)
     try {
@@ -389,7 +470,7 @@ export function SettingsPage() {
     if (confirm('确定要清除所有账号数据吗？此操作不可恢复！')) {
       if (confirm('再次确认：这将删除所有账号、分组和标签数据！')) {
         // 清除所有数据
-        Array.from(accounts.keys()).forEach(id => {
+        Array.from(accounts.keys()).forEach((id) => {
           useAccountsStore.getState().removeAccount(id)
         })
         alert('所有数据已清除')
@@ -409,7 +490,9 @@ export function SettingsPage() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-primary">{t('settings.title')}</h1>
-            <p className="text-muted-foreground">{t('settings.title') === 'Settings' ? 'Configure app features' : '配置应用的各项功能'}</p>
+            <p className="text-muted-foreground">
+              {t('settings.title') === 'Settings' ? 'Configure app features' : '配置应用的各项功能'}
+            </p>
           </div>
         </div>
       </div>
@@ -428,7 +511,9 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">显示语言 / Display Language</p>
-              <p className="text-sm text-muted-foreground">选择界面显示语言 / Select interface language</p>
+              <p className="text-sm text-muted-foreground">
+                选择界面显示语言 / Select interface language
+              </p>
             </div>
             <select
               className="w-[160px] h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -463,30 +548,36 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">{isEn ? 'Dark Mode' : '深色模式'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Toggle dark/light theme' : '切换深色/浅色主题'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn ? 'Toggle dark/light theme' : '切换深色/浅色主题'}
+              </p>
             </div>
             <Button
-              variant={darkMode ? "default" : "outline"}
+              variant={darkMode ? 'default' : 'outline'}
               size="sm"
               onClick={() => setDarkMode(!darkMode)}
             >
               {darkMode ? <Moon className="h-4 w-4 mr-2" /> : <Sun className="h-4 w-4 mr-2" />}
-              {darkMode ? (isEn ? 'Dark' : '深色') : (isEn ? 'Light' : '浅色')}
+              {darkMode ? (isEn ? 'Dark' : '深色') : isEn ? 'Light' : '浅色'}
             </Button>
           </div>
 
           {/* 主题颜色 */}
           <div className="pt-2 border-t">
-            <button 
+            <button
               className="flex items-center justify-between w-full text-left"
               onClick={() => setThemeExpanded(!themeExpanded)}
             >
               <div className="flex items-center gap-2">
                 <p className="font-medium">{isEn ? 'Theme Color' : '主题颜色'}</p>
                 {!themeExpanded && (
-                  <div 
+                  <div
                     className="w-5 h-5 rounded-full ring-2 ring-primary ring-offset-1"
-                    style={{ backgroundColor: themeGroups.flatMap(g => g.themes).find(t => t.id === theme)?.color || '#3b82f6' }}
+                    style={{
+                      backgroundColor:
+                        themeGroups.flatMap((g) => g.themes).find((t) => t.id === theme)?.color ||
+                        '#3b82f6'
+                    }}
                   />
                 )}
               </div>
@@ -500,14 +591,16 @@ export function SettingsPage() {
               <div className="space-y-3 mt-3">
                 {themeGroups.map((group) => (
                   <div key={group.name} className="flex items-center gap-3">
-                    <span className="text-xs text-muted-foreground w-14 shrink-0">{group.name}</span>
+                    <span className="text-xs text-muted-foreground w-14 shrink-0">
+                      {group.name}
+                    </span>
                     <div className="flex flex-wrap gap-2">
                       {group.themes.map((t) => (
                         <button
                           key={t.id}
                           className={`group relative w-7 h-7 rounded-full transition-all ${
-                            theme === t.id 
-                              ? 'ring-2 ring-primary ring-offset-2 scale-110' 
+                            theme === t.id
+                              ? 'ring-2 ring-primary ring-offset-2 scale-110'
                               : 'hover:scale-110 hover:shadow-md'
                           }`}
                           style={{ backgroundColor: t.color }}
@@ -533,7 +626,11 @@ export function SettingsPage() {
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-3">
             <div className="p-2 rounded-lg bg-primary/10">
-              {privacyMode ? <EyeOff className="h-4 w-4 text-primary" /> : <Eye className="h-4 w-4 text-primary" />}
+              {privacyMode ? (
+                <EyeOff className="h-4 w-4 text-primary" />
+              ) : (
+                <Eye className="h-4 w-4 text-primary" />
+              )}
             </div>
             {isEn ? 'Privacy' : '隐私设置'}
           </CardTitle>
@@ -542,34 +639,44 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">{isEn ? 'Privacy Mode' : '隐私模式'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Hide emails and sensitive info' : '隐藏邮箱和账号敏感信息'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn ? 'Hide emails and sensitive info' : '隐藏邮箱和账号敏感信息'}
+              </p>
             </div>
             <Button
-              variant={privacyMode ? "default" : "outline"}
+              variant={privacyMode ? 'default' : 'outline'}
               size="sm"
               onClick={() => setPrivacyMode(!privacyMode)}
             >
               {privacyMode ? <EyeOff className="h-4 w-4 mr-2" /> : <Eye className="h-4 w-4 mr-2" />}
-              {privacyMode ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+              {privacyMode ? (isEn ? 'On' : '已开启') : isEn ? 'Off' : '已关闭'}
             </Button>
           </div>
           <div className="flex items-center justify-between pt-2 border-t">
             <div>
               <p className="font-medium">{isEn ? 'Usage Precision' : '使用量精度'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Show decimal places for usage values' : '显示使用量的小数精度（如 1.22 而非 1）'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn
+                  ? 'Show decimal places for usage values'
+                  : '显示使用量的小数精度（如 1.22 而非 1）'}
+              </p>
             </div>
             <Button
-              variant={usagePrecision ? "default" : "outline"}
+              variant={usagePrecision ? 'default' : 'outline'}
               size="sm"
               onClick={() => setUsagePrecision(!usagePrecision)}
             >
-              {usagePrecision ? (isEn ? 'Decimal' : '小数') : (isEn ? 'Integer' : '整数')}
+              {usagePrecision ? (isEn ? 'Decimal' : '小数') : isEn ? 'Integer' : '整数'}
             </Button>
           </div>
           <div className="flex items-center justify-between pt-2 border-t">
             <div>
               <p className="font-medium">{isEn ? 'Switch Target' : '切号目标'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Which client to switch account credentials to' : '切换账号凭证写入的客户端'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn
+                  ? 'Which client to switch account credentials to'
+                  : '切换账号凭证写入的客户端'}
+              </p>
             </div>
             <select
               className="h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -584,15 +691,19 @@ export function SettingsPage() {
           <div className="flex items-center justify-between pt-2 border-t">
             <div>
               <p className="font-medium">{isEn ? 'Login Private Mode' : '登录隐私模式'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Open browser in incognito/private mode when logging in' : '在线登录时使用浏览器无痕/隐私模式打开'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn
+                  ? 'Open browser in incognito/private mode when logging in'
+                  : '在线登录时使用浏览器无痕/隐私模式打开'}
+              </p>
             </div>
             <Button
-              variant={loginPrivateMode ? "default" : "outline"}
+              variant={loginPrivateMode ? 'default' : 'outline'}
               size="sm"
               onClick={() => setLoginPrivateMode(!loginPrivateMode)}
             >
               <UserX className="h-4 w-4 mr-2" />
-              {loginPrivateMode ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+              {loginPrivateMode ? (isEn ? 'On' : '已开启') : isEn ? 'Off' : '已关闭'}
             </Button>
           </div>
         </CardContent>
@@ -612,28 +723,49 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">{isEn ? 'Auto Refresh' : '自动刷新'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Auto refresh tokens before expiration' : 'Token 过期前自动刷新，并同步更新账户信息'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn
+                  ? 'Auto refresh tokens before expiration'
+                  : 'Token 过期前自动刷新，并同步更新账户信息'}
+              </p>
             </div>
             <Button
-              variant={autoRefreshEnabled ? "default" : "outline"}
+              variant={autoRefreshEnabled ? 'default' : 'outline'}
               size="sm"
               onClick={() => setAutoRefresh(!autoRefreshEnabled)}
             >
-              {autoRefreshEnabled ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+              {autoRefreshEnabled ? (isEn ? 'On' : '已开启') : isEn ? 'Off' : '已关闭'}
             </Button>
           </div>
 
           {autoRefreshEnabled && (
             <>
               <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3 space-y-1">
-                <p>• {isEn ? 'Auto refresh tokens to keep login' : 'Token 即将过期时自动刷新，保持登录状态'}</p>
-                <p>• {isEn ? 'Update usage and subscription info after refresh' : 'Token 刷新后自动更新账户用量、订阅等信息'}</p>
-                <p>• {isEn ? 'Check all balances when auto-switch is on' : '开启自动换号时，会定期检查所有账户余额'}</p>
+                <p>
+                  •{' '}
+                  {isEn
+                    ? 'Auto refresh tokens to keep login'
+                    : 'Token 即将过期时自动刷新，保持登录状态'}
+                </p>
+                <p>
+                  •{' '}
+                  {isEn
+                    ? 'Update usage and subscription info after refresh'
+                    : 'Token 刷新后自动更新账户用量、订阅等信息'}
+                </p>
+                <p>
+                  •{' '}
+                  {isEn
+                    ? 'Check all balances when auto-switch is on'
+                    : '开启自动换号时，会定期检查所有账户余额'}
+                </p>
               </div>
               <div className="flex items-center justify-between pt-2 border-t">
                 <div>
                   <p className="font-medium">{isEn ? 'Check Interval' : '检查间隔'}</p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'How often to check account status' : '每隔多久检查一次账户状态'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn ? 'How often to check account status' : '每隔多久检查一次账户状态'}
+                  </p>
                 </div>
                 <select
                   className="w-[120px] h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -654,7 +786,11 @@ export function SettingsPage() {
               <div className="flex items-center justify-between pt-2 border-t">
                 <div>
                   <p className="font-medium">{isEn ? 'Concurrency' : '刷新并发数'}</p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'Number of accounts to refresh simultaneously' : '同时刷新的账号数量，过大可能卡顿'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn
+                      ? 'Number of accounts to refresh simultaneously'
+                      : '同时刷新的账号数量，过大可能卡顿'}
+                  </p>
                 </div>
                 <input
                   type="number"
@@ -668,20 +804,28 @@ export function SettingsPage() {
               <div className="flex items-center justify-between pt-2 border-t">
                 <div>
                   <p className="font-medium">{isEn ? 'Sync Account Info' : '同步检测账户信息'}</p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'Detect usage, subscription, and ban status' : '刷新 Token 时同步检测用量、订阅、封禁状态'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn
+                      ? 'Detect usage, subscription, and ban status'
+                      : '刷新 Token 时同步检测用量、订阅、封禁状态'}
+                  </p>
                 </div>
                 <Button
-                  variant={autoRefreshSyncInfo ? "default" : "outline"}
+                  variant={autoRefreshSyncInfo ? 'default' : 'outline'}
                   size="sm"
                   onClick={() => setAutoRefreshSyncInfo(!autoRefreshSyncInfo)}
                 >
-                  {autoRefreshSyncInfo ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+                  {autoRefreshSyncInfo ? (isEn ? 'On' : '已开启') : isEn ? 'Off' : '已关闭'}
                 </Button>
               </div>
               <div className="flex items-center justify-between pt-2 border-t">
                 <div>
                   <p className="font-medium">{isEn ? 'Manual Trigger' : '手动触发'}</p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'Manually trigger auto-refresh for debugging' : '手动触发一次自动刷新流程（用于调试）'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn
+                      ? 'Manually trigger auto-refresh for debugging'
+                      : '手动触发一次自动刷新流程（用于调试）'}
+                  </p>
                 </div>
                 <Button
                   variant="outline"
@@ -689,11 +833,151 @@ export function SettingsPage() {
                   onClick={handleManualRefresh}
                   disabled={isManualRefreshing}
                 >
-                  {isManualRefreshing ? (isEn ? 'Refreshing...' : '刷新中...') : (isEn ? 'Trigger Now' : '立即触发')}
+                  {isManualRefreshing
+                    ? isEn
+                      ? 'Refreshing...'
+                      : '刷新中...'
+                    : isEn
+                      ? 'Trigger Now'
+                      : '立即触发'}
                 </Button>
               </div>
             </>
           )}
+        </CardContent>
+      </Card>
+
+      {/* 定期自动注册设置 */}
+      <Card className="border-0 shadow-sm hover:shadow-md transition-shadow duration-200">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <UserX className="h-4 w-4 text-primary" />
+            </div>
+            {isEn ? 'Scheduled Account Creation' : '定期创建账号'}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium">
+                {isEn ? 'Create new account periodically' : '定期创建新账号'}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {isEn
+                  ? 'Off by default. Uses the saved Browser registration settings from the Register page.'
+                  : '默认关闭。使用注册页面保存的浏览器注册配置。'}
+              </p>
+            </div>
+            <Button
+              variant={scheduledRegisterEnabled ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleScheduledRegistrationChange(!scheduledRegisterEnabled)}
+              disabled={scheduledRegisterLoading}
+            >
+              {scheduledRegisterEnabled ? (isEn ? 'On' : '已开启') : isEn ? 'Off' : '已关闭'}
+            </Button>
+          </div>
+          {scheduledRegisterEnabled && (
+            <div className="space-y-4 pt-2 border-t">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">{isEn ? 'Creation Method' : '创建方式'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn
+                      ? 'Browser DDG is the default method for scheduled creation'
+                      : '定时创建默认使用 Browser DDG'}
+                  </p>
+                </div>
+                <select
+                  className="w-[220px] h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+                  value={scheduledRegisterMethod}
+                  onChange={(e) =>
+                    handleScheduledRegistrationChange(
+                      scheduledRegisterEnabled,
+                      scheduledRegisterIntervalMin,
+                      scheduledRegisterStartTime,
+                      scheduledRegisterEndTime,
+                      e.target.value as 'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
+                    )
+                  }
+                  disabled={scheduledRegisterLoading}
+                >
+                  <option value="browser-ddg">Browser DDG</option>
+                  <option value="browser-tempmail">Browser TempMail.Plus</option>
+                  <option value="browser-moemail">Browser MoEmail</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">{isEn ? 'Interval' : '间隔'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn ? 'How often to create a new account' : '每隔多久创建一个新账号'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={1}
+                    className="w-24 text-center"
+                    value={scheduledRegisterIntervalMin}
+                    onChange={(e) => {
+                      const next = Math.max(1, Number(e.target.value) || 30)
+                      setScheduledRegisterIntervalMin(next)
+                      handleScheduledRegistrationChange(
+                        scheduledRegisterEnabled,
+                        next,
+                        scheduledRegisterStartTime,
+                        scheduledRegisterEndTime,
+                        scheduledRegisterMethod
+                      )
+                    }}
+                    disabled={scheduledRegisterLoading}
+                  />
+                  <span className="text-sm text-muted-foreground">{isEn ? 'min' : '分钟'}</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">{isEn ? 'Active Time Period' : '生效时间段'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn
+                      ? 'Only create accounts during this daily time window. 00:00-00:00 means all day.'
+                      : '仅在每天此时间段内创建账号。00:00-00:00 表示全天。'}
+                  </p>
+                </div>
+                <TimeRangeSlider
+                  className="w-72"
+                  startTime={scheduledRegisterStartTime}
+                  endTime={scheduledRegisterEndTime}
+                  disabled={scheduledRegisterLoading}
+                  onChange={(startTime, endTime) =>
+                    handleScheduledRegistrationChange(
+                      scheduledRegisterEnabled,
+                      scheduledRegisterIntervalMin,
+                      startTime,
+                      endTime,
+                      scheduledRegisterMethod
+                    )
+                  }
+                />
+              </div>
+            </div>
+          )}
+          <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3 space-y-1">
+            <p>
+              •{' '}
+              {isEn
+                ? 'Default is OFF, Browser DDG, 30 minutes, and all day when enabled.'
+                : '默认关闭，开启后默认 Browser DDG、30 分钟且全天生效。'}
+            </p>
+            <p>
+              •{' '}
+              {isEn
+                ? 'Configure DDG/TempMail/proxy details on the Register page first.'
+                : '请先在注册页面配置 DDG/TempMail/代理等信息。'}
+            </p>
+          </div>
         </CardContent>
       </Card>
 
@@ -711,7 +995,9 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">{isEn ? 'Usage API Type' : '用量查询 API'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Select API type for querying usage limits' : '选择查询账户用量的 API 类型'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn ? 'Select API type for querying usage limits' : '选择查询账户用量的 API 类型'}
+              </p>
             </div>
             <select
               className="w-[180px] h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -724,26 +1010,40 @@ export function SettingsPage() {
             </select>
           </div>
           <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3 space-y-1">
-            <p>• <strong>REST</strong>: {isEn ? 'Official Kiro IDE format, recommended' : '官方 Kiro IDE 使用的格式，推荐使用'}</p>
-            <p>• <strong>CBOR</strong>: {isEn ? 'Web portal format, may have different fields' : '网页端格式，字段可能有差异'}</p>
+            <p>
+              • <strong>REST</strong>:{' '}
+              {isEn
+                ? 'Official Kiro IDE format, recommended'
+                : '官方 Kiro IDE 使用的格式，推荐使用'}
+            </p>
+            <p>
+              • <strong>CBOR</strong>:{' '}
+              {isEn ? 'Web portal format, may have different fields' : '网页端格式，字段可能有差异'}
+            </p>
           </div>
           <div className="flex items-center justify-between pt-2 border-t">
             <div>
               <p className="font-medium">{isEn ? 'Use K-Proxy for API' : 'API 请求走 K-Proxy'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Route API requests through K-Proxy MITM proxy' : 'API 请求通过 K-Proxy MITM 代理发送'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn
+                  ? 'Route API requests through K-Proxy MITM proxy'
+                  : 'API 请求通过 K-Proxy MITM 代理发送'}
+              </p>
             </div>
             <Button
-              variant={useKProxyForApi ? "default" : "outline"}
+              variant={useKProxyForApi ? 'default' : 'outline'}
               size="sm"
               onClick={() => handleKProxyChange(!useKProxyForApi)}
               disabled={kproxyLoading}
             >
-              {useKProxyForApi ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+              {useKProxyForApi ? (isEn ? 'On' : '已开启') : isEn ? 'Off' : '已关闭'}
             </Button>
           </div>
           {useKProxyForApi && (
             <div className="text-xs text-amber-500 bg-amber-500/10 rounded-lg p-3">
-              {isEn ? '⚠️ K-Proxy must be running for this to work' : '⚠️ 需要先启动 K-Proxy MITM 代理才能生效'}
+              {isEn
+                ? '⚠️ K-Proxy must be running for this to work'
+                : '⚠️ 需要先启动 K-Proxy MITM 代理才能生效'}
             </div>
           )}
         </CardContent>
@@ -763,14 +1063,16 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">{isEn ? 'Enable Proxy' : '启用代理'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'All requests through proxy server' : '所有网络请求将通过代理服务器'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn ? 'All requests through proxy server' : '所有网络请求将通过代理服务器'}
+              </p>
             </div>
             <Button
-              variant={proxyEnabled ? "default" : "outline"}
+              variant={proxyEnabled ? 'default' : 'outline'}
               size="sm"
               onClick={() => setProxy(!proxyEnabled, tempProxyUrl)}
             >
-              {proxyEnabled ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+              {proxyEnabled ? (isEn ? 'On' : '已开启') : isEn ? 'Off' : '已关闭'}
             </Button>
           </div>
 
@@ -784,8 +1086,8 @@ export function SettingsPage() {
                 value={tempProxyUrl}
                 onChange={(e) => setTempProxyUrl(e.target.value)}
               />
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 size="sm"
                 onClick={() => setProxy(proxyEnabled, tempProxyUrl)}
                 disabled={tempProxyUrl === proxyUrl}
@@ -794,7 +1096,9 @@ export function SettingsPage() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              {isEn ? 'Supports HTTP/HTTPS/SOCKS5, format: protocol://host:port' : '支持 HTTP/HTTPS/SOCKS5 代理，格式: protocol://host:port'}
+              {isEn
+                ? 'Supports HTTP/HTTPS/SOCKS5, format: protocol://host:port'
+                : '支持 HTTP/HTTPS/SOCKS5 代理，格式: protocol://host:port'}
             </p>
           </div>
         </CardContent>
@@ -814,14 +1118,16 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">{isEn ? 'Enable Auto Switch' : '启用自动换号'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Auto switch when balance is low' : '余额不足时自动切换到其他可用账号'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn ? 'Auto switch when balance is low' : '余额不足时自动切换到其他可用账号'}
+              </p>
             </div>
             <Button
-              variant={autoSwitchEnabled ? "default" : "outline"}
+              variant={autoSwitchEnabled ? 'default' : 'outline'}
               size="sm"
               onClick={() => setAutoSwitch(!autoSwitchEnabled)}
             >
-              {autoSwitchEnabled ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+              {autoSwitchEnabled ? (isEn ? 'On' : '已开启') : isEn ? 'Off' : '已关闭'}
             </Button>
           </div>
 
@@ -830,7 +1136,9 @@ export function SettingsPage() {
               <div className="flex items-center justify-between pt-2 border-t">
                 <div>
                   <p className="font-medium">{isEn ? 'Balance Threshold' : '余额阈值'}</p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'Switch when balance below this' : '余额低于此值时自动切换'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn ? 'Switch when balance below this' : '余额低于此值时自动切换'}
+                  </p>
                 </div>
                 <input
                   type="number"
@@ -847,7 +1155,9 @@ export function SettingsPage() {
                     <Clock className="h-4 w-4" />
                     {isEn ? 'Check Interval' : '检查间隔'}
                   </p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'How often to check balance' : '每隔多久检查一次余额'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn ? 'How often to check balance' : '每隔多久检查一次余额'}
+                  </p>
                 </div>
                 <select
                   className="h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -881,7 +1191,11 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">{isEn ? 'Concurrency' : '并发数'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Too high may cause API rate limiting' : '同时验证的账号数量，过大可能导致 API 限流'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn
+                  ? 'Too high may cause API rate limiting'
+                  : '同时验证的账号数量，过大可能导致 API 限流'}
+              </p>
             </div>
             <input
               type="number"
@@ -893,7 +1207,9 @@ export function SettingsPage() {
             />
           </div>
           <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-2">
-            {isEn ? 'Recommended: 10-100. Too high may cause failures, too low is slow.' : '建议范围: 10-100。设置过大可能导致大量「验证失败」，设置过小则导入速度较慢。'}
+            {isEn
+              ? 'Recommended: 10-100. Too high may cause failures, too low is slow.'
+              : '建议范围: 10-100。设置过大可能导致大量「验证失败」，设置过小则导入速度较慢。'}
           </p>
         </CardContent>
       </Card>
@@ -916,14 +1232,16 @@ export function SettingsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-medium">{isEn ? 'Enable System Tray' : '启用系统托盘'}</p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'Show icon in system tray' : '在系统托盘显示图标'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn ? 'Show icon in system tray' : '在系统托盘显示图标'}
+                  </p>
                 </div>
                 <Button
                   variant={traySettings.enabled ? 'default' : 'outline'}
                   size="sm"
                   onClick={() => handleTraySettingChange('enabled', !traySettings.enabled)}
                 >
-                  {traySettings.enabled ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+                  {traySettings.enabled ? (isEn ? 'On' : '已开启') : isEn ? 'Off' : '已关闭'}
                 </Button>
               </div>
 
@@ -932,7 +1250,9 @@ export function SettingsPage() {
                   <div className="flex items-center justify-between pt-2 border-t">
                     <div>
                       <p className="font-medium">{isEn ? 'Close Button Action' : '关闭按钮行为'}</p>
-                      <p className="text-sm text-muted-foreground">{isEn ? 'What happens when you click X' : '点击关闭按钮时的行为'}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {isEn ? 'What happens when you click X' : '点击关闭按钮时的行为'}
+                      </p>
                     </div>
                     <select
                       className="w-[140px] h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -948,9 +1268,16 @@ export function SettingsPage() {
               )}
 
               <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3 space-y-1">
-                <p>• {isEn ? 'Double-click tray icon to show window' : '双击托盘图标可以显示主窗口'}</p>
+                <p>
+                  • {isEn ? 'Double-click tray icon to show window' : '双击托盘图标可以显示主窗口'}
+                </p>
                 <p>• {isEn ? 'Right-click tray icon to show menu' : '右键托盘图标可以显示菜单'}</p>
-                <p>• {isEn ? 'Tray menu shows current account info and usage' : '托盘菜单可以查看当前账户信息和用量'}</p>
+                <p>
+                  •{' '}
+                  {isEn
+                    ? 'Tray menu shows current account info and usage'
+                    : '托盘菜单可以查看当前账户信息和用量'}
+                </p>
               </div>
             </>
           )}
@@ -975,13 +1302,21 @@ export function SettingsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-medium">{isEn ? 'Show Window' : '显示主窗口'}</p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'Global shortcut to show main window' : '全局快捷键唤起主窗口'}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isEn ? 'Global shortcut to show main window' : '全局快捷键唤起主窗口'}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
                     className={`w-[160px] h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-center ${isRecordingShortcut ? 'border-primary ring-1 ring-primary animate-pulse' : ''}`}
-                    value={isRecordingShortcut ? (isEn ? 'Press keys...' : '请按键...') : showWindowShortcut}
+                    value={
+                      isRecordingShortcut
+                        ? isEn
+                          ? 'Press keys...'
+                          : '请按键...'
+                        : showWindowShortcut
+                    }
                     onKeyDown={handleKeyDown}
                     onFocus={() => setIsRecordingShortcut(true)}
                     onBlur={() => setIsRecordingShortcut(false)}
@@ -1000,13 +1335,23 @@ export function SettingsPage() {
                   )}
                 </div>
               </div>
-              {shortcutError && (
-                <p className="text-sm text-destructive">{shortcutError}</p>
-              )}
+              {shortcutError && <p className="text-sm text-destructive">{shortcutError}</p>}
               <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3 space-y-1">
-                <p>• {isEn ? 'Click input and press key combination to record' : '点击输入框后按下组合键自动录制'}</p>
-                <p>• {isEn ? 'macOS use Command, Windows/Linux use Ctrl' : 'macOS 使用 Command，Windows/Linux 使用 Ctrl'}</p>
-                <p>• {isEn ? 'Click trash icon to clear shortcut' : '点击垃圾桶图标可清除快捷键'}</p>
+                <p>
+                  •{' '}
+                  {isEn
+                    ? 'Click input and press key combination to record'
+                    : '点击输入框后按下组合键自动录制'}
+                </p>
+                <p>
+                  •{' '}
+                  {isEn
+                    ? 'macOS use Command, Windows/Linux use Ctrl'
+                    : 'macOS 使用 Command，Windows/Linux 使用 Ctrl'}
+                </p>
+                <p>
+                  • {isEn ? 'Click trash icon to clear shortcut' : '点击垃圾桶图标可清除快捷键'}
+                </p>
               </div>
             </>
           )}
@@ -1023,7 +1368,9 @@ export function SettingsPage() {
             <div className="flex-1">
               <p className="font-medium text-sm">{isEn ? 'Machine ID' : '机器码管理'}</p>
               <p className="text-xs text-muted-foreground">
-                {isEn ? 'Device identifier, auto-switch, account binding' : '修改设备标识符、切号自动换码、账户机器码绑定等功能'}
+                {isEn
+                  ? 'Device identifier, auto-switch, account binding'
+                  : '修改设备标识符、切号自动换码、账户机器码绑定等功能'}
               </p>
             </div>
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -1048,7 +1395,11 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">{isEn ? 'Export Data' : '导出数据'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Supports JSON, TXT, CSV, Clipboard' : '支持 JSON、TXT、CSV、剪贴板等多种格式'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn
+                  ? 'Supports JSON, TXT, CSV, Clipboard'
+                  : '支持 JSON、TXT、CSV、剪贴板等多种格式'}
+              </p>
             </div>
             <Button variant="outline" size="sm" onClick={handleExport}>
               <Download className="h-4 w-4 mr-2" />
@@ -1059,18 +1410,24 @@ export function SettingsPage() {
           <div className="flex items-center justify-between pt-2 border-t">
             <div>
               <p className="font-medium">{isEn ? 'Import Data' : '导入数据'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Import accounts from JSON file' : '从 JSON 文件导入账号数据'}</p>
+              <p className="text-sm text-muted-foreground">
+                {isEn ? 'Import accounts from JSON file' : '从 JSON 文件导入账号数据'}
+              </p>
             </div>
             <Button variant="outline" size="sm" onClick={handleImport} disabled={isImporting}>
               <Upload className="h-4 w-4 mr-2" />
-              {isImporting ? (isEn ? 'Importing...' : '导入中...') : (isEn ? 'Import' : '导入')}
+              {isImporting ? (isEn ? 'Importing...' : '导入中...') : isEn ? 'Import' : '导入'}
             </Button>
           </div>
 
           <div className="flex items-center justify-between pt-2 border-t">
             <div>
-              <p className="font-medium text-destructive">{isEn ? 'Clear All Data' : '清除所有数据'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Delete all accounts, groups and tags' : '删除所有账号、分组和标签'}</p>
+              <p className="font-medium text-destructive">
+                {isEn ? 'Clear All Data' : '清除所有数据'}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {isEn ? 'Delete all accounts, groups and tags' : '删除所有账号、分组和标签'}
+              </p>
             </div>
             <Button variant="destructive" size="sm" onClick={handleClearData}>
               <Trash2 className="h-4 w-4 mr-2" />

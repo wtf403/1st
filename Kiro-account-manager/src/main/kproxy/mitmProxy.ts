@@ -257,7 +257,7 @@ export class MitmProxy {
     let modifiedHeaders = ''
     let requestInfo: KProxyRequestInfo | null = null
 
-    clientSocket.on('data', (chunk: Buffer) => {
+    const onClientData = (chunk: Buffer): void => {
       if (!headersParsed) {
         requestBuffer = Buffer.concat([requestBuffer, chunk])
         const headerEnd = requestBuffer.indexOf('\r\n\r\n')
@@ -300,6 +300,15 @@ export class MitmProxy {
           }
           bodyReceived = modifiedBody.length
 
+          // Stop the TLS socket while the upstream TLS connection is being established.
+          // Large Kiro/Claude requests are commonly split across multiple TLS data chunks.
+          // Previously those chunks could arrive before forwardRequest attached its own
+          // listener, while this parser listener ignored them after headersParsed=true.
+          // That dropped part of the request body, leaving upstream waiting for the
+          // declared Content-Length until the app-side endpoint timeout fired.
+          clientSocket.pause()
+          clientSocket.removeListener('data', onClientData)
+
           // 转发请求到目标服务器
           this.forwardRequest(
             modifiedHeaders,
@@ -312,7 +321,9 @@ export class MitmProxy {
           )
         }
       }
-    })
+    }
+
+    clientSocket.on('data', onClientData)
 
     clientSocket.on('error', (error) => {
       console.error(`[MitmProxy] Decrypted connection error:`, error.message)
@@ -442,10 +453,17 @@ export class MitmProxy {
 
         // 如果还有更多数据，继续转发
         if (bodyReceived < contentLength) {
-          clientSocket.on('data', (chunk: Buffer) => {
+          const onBodyData = (chunk: Buffer): void => {
             serverSocket.write(chunk)
             bodyReceived += chunk.length
-          })
+            if (bodyReceived >= contentLength) {
+              clientSocket.removeListener('data', onBodyData)
+            }
+          }
+          clientSocket.on('data', onBodyData)
+          clientSocket.resume()
+        } else {
+          clientSocket.resume()
         }
       }
     )

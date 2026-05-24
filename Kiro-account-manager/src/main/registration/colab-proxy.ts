@@ -34,6 +34,12 @@ export interface GenerateColabProxyConfig {
   cdpAddress?: string
   formUrl?: string
   cellSelector?: string
+  signal?: AbortSignal
+  onLog?: (message: string) => void
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('Proxy generation aborted')
 }
 
 function sleep(ms: number): Promise<void> {
@@ -232,8 +238,12 @@ async function waitForCdp(cdpBase: string): Promise<void> {
   )
 }
 
+let activeColabLogSink: ((message: string) => void) | undefined
+
 function logColab(message: string): void {
-  console.log(`[Collab] ${message}`)
+  const formatted = `[Colab] ${message}`
+  console.log(formatted)
+  activeColabLogSink?.(formatted)
 }
 
 function clickScript(selector: string): string {
@@ -347,15 +357,15 @@ async function findOrOpenColabTarget(cdpBase: string, notebookUrl: string): Prom
   let initialError = ''
   try {
     targets = await fetchJson<CdpTarget[]>(`${cdpBase}/json/list`)
-    logColab(`Connected to CDP; found ${targets.length} target(s)`)
+    logColab(`✓ Connected to CDP; found ${targets.length} target(s)`)
   } catch (error) {
     initialError = error instanceof Error ? error.message : String(error)
-    logColab(`CDP is not ready, launching Chrome/Chromium: ${initialError}`)
+    logColab(`⚠️ CDP is not ready, launching Chrome/Chromium: ${initialError}`)
     try {
       await launchDefaultChromeProfile(cdpBase, notebookUrl)
       await waitForCdp(cdpBase)
       targets = await fetchJson<CdpTarget[]>(`${cdpBase}/json/list`)
-      logColab(`Chrome launched; found ${targets.length} target(s)`)
+      logColab(`✓ Chrome launched; found ${targets.length} target(s)`)
     } catch (launchError) {
       const launchMessage = launchError instanceof Error ? launchError.message : String(launchError)
       throw new Error(`${launchMessage}. Initial CDP error: ${initialError}`)
@@ -365,7 +375,7 @@ async function findOrOpenColabTarget(cdpBase: string, notebookUrl: string): Prom
     (item) => item.type === 'page' && item.url?.includes('colab.research.google.com')
   )
   if (target) {
-    logColab(`Reusing Colab tab: ${target.title || target.url || target.id}`)
+    logColab(`✓ Reusing Colab tab: ${target.title || target.url || target.id}`)
     return target
   }
 
@@ -377,16 +387,23 @@ async function findOrOpenColabTarget(cdpBase: string, notebookUrl: string): Prom
     target = await fetchJson<CdpTarget>(`${cdpBase}/json/new?${encodedUrl}`)
   }
 
+  logColab('Waiting 5 seconds for tab to initialize...')
   await sleep(5000)
   targets = await fetchJson<CdpTarget[]>(`${cdpBase}/json/list`)
   const openedTarget = targets.find((item) => item.id === target?.id) || target
-  logColab(`Opened Colab target: ${openedTarget.title || openedTarget.url || openedTarget.id}`)
+  logColab(`✓ Opened Colab target: ${openedTarget.title || openedTarget.url || openedTarget.id}`)
   return openedTarget
 }
 
 async function clickYesButton(session: CdpSession): Promise<boolean> {
   return await session.evaluate<boolean>(`
     (() => {
+      const clickElement = (el) => {
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+          el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+        });
+        el.click?.();
+      };
       const findYesButton = (root) => {
         const textButtons = root.querySelectorAll('md-text-button');
         for (const btn of textButtons) {
@@ -403,15 +420,24 @@ async function clickYesButton(session: CdpSession): Promise<boolean> {
         return null;
       };
       const yesButton = findYesButton(document);
-      if (!yesButton) return false;
-      yesButton.click();
-      return true;
+      if (yesButton) {
+        clickElement(yesButton);
+        return true;
+      }
+      const dialog = document.querySelector('mwc-dialog');
+      const fallback = dialog?.querySelector('[slot="primaryAction"]');
+      const fallbackButton = fallback?.shadowRoot?.querySelector('button') || fallback;
+      if (fallbackButton) {
+        clickElement(fallbackButton);
+        return true;
+      }
+      return false;
     })()
   `)
 }
 
 async function clickRunButton(session: CdpSession): Promise<void> {
-  logColab('Waiting for Colab run button')
+  logColab('Waiting for Colab run button...')
   const result = await session.evaluate<{ clicked: boolean; debug: string }>(
     `
     new Promise((resolve) => {
@@ -483,51 +509,110 @@ async function clickRunButton(session: CdpSession): Promise<void> {
   )
 
   if (!result.clicked) {
-    logColab(`Run button not found. Page buttons: ${result.debug}`)
+    logColab(`⚠️ Run button not found. Page buttons: ${result.debug}`)
     throw new Error('Timed out waiting for Colab run button')
   }
-  logColab(`Clicked Colab run button: ${result.debug}`)
+  logColab(`✓ Clicked Colab run button: ${result.debug.substring(0, 100)}`)
 }
 
 async function disconnectRuntime(session: CdpSession): Promise<void> {
-  logColab('Opening runtime menu')
+  logColab('Checking runtime status before disconnect...')
+  const statusText = await session.evaluate<string>(`
+    (() => {
+      const statusEl = document.querySelector('#runtime-menu-button');
+      return (statusEl?.textContent || '').toLowerCase();
+    })()
+  `)
+  logColab(`Runtime status text: ${statusText || '(empty)'}`)
+
+  if (statusText.includes('connect') && !statusText.includes('disconnect')) {
+    logColab('Runtime appears disconnected; connecting first so powerwash option is available...')
+    const menuClicked = await session.evaluate<boolean>(clickScript('#runtime-menu-button'))
+    logColab(`Runtime menu click for connect result: ${menuClicked}`)
+    await sleep(1000)
+    const connectClicked = await session.evaluate<boolean>(clickScript('div[command="connect"]'))
+    logColab(`Connect runtime menu item click result: ${connectClicked}`)
+    logColab('Waiting 15 seconds for runtime connection...')
+    await sleep(15000)
+  } else {
+    logColab('Runtime appears connected or status is ambiguous; continuing to powerwash')
+  }
+
+  logColab('Opening Runtime menu for disconnect/delete runtime...')
   const menuClicked = await session.evaluate<boolean>(clickScript('#runtime-menu-button'))
   logColab(`Runtime menu click result: ${menuClicked}`)
-  await sleep(1500)
-  const clicked = await session.evaluate<boolean>(
-    `
-    (() => {
-      const commands = [
-        'disconnect',
-        'disconnect-and-delete-runtime',
-        'manage-sessions'
-      ];
-      for (const command of commands) {
-        const el = document.querySelector(` +
-      '`div[command="${command}"]`' +
-      `);
-        if (el) {
-          el.click();
-          return true;
-        }
-      }
-      const items = Array.from(document.querySelectorAll('[role="menuitem"], paper-item, mwc-list-item'));
-      const item = items.find((el) => /disconnect|delete runtime|terminate/i.test(el.textContent || ''));
-      if (item) {
-        item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        return true;
-      }
-      return false;
-    })()
-  `
-  )
-  logColab(`Disconnect runtime menu item click result: ${clicked}`)
-  if (clicked) {
-    await sleep(1500)
-    const yesClicked = await clickYesButton(session)
-    logColab(`Disconnect confirmation click result: ${yesClicked}`)
+
+  if (!menuClicked) {
+    logColab('⚠️ Failed to click runtime menu button')
+    throw new Error('Failed to click runtime menu button')
   }
-  await sleep(10000)
+
+  await sleep(2500)
+
+  const clickPowerwash = async (label: string): Promise<boolean> => {
+    const result = await session.evaluate<{ clicked: boolean; debug: string }>(`
+      (() => {
+        const clickElement = (el) => {
+          ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+            el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+          });
+          el.click?.();
+        };
+        const selectors = [
+          'div[command="powerwash-current-vm"]',
+          'paper-item[command="powerwash-current-vm"]',
+          '[command="powerwash-current-vm"]',
+          'div[command="disconnect-and-delete-runtime"]',
+          '[command="disconnect-and-delete-runtime"]',
+          'div[command="disconnect"]',
+          '[command="disconnect"]'
+        ];
+        for (const selector of selectors) {
+          const el = document.querySelector(selector);
+          if (el) {
+            clickElement(el);
+            return { clicked: true, debug: selector + ' :: ' + (el.textContent || '').trim().slice(0, 120) };
+          }
+        }
+        const items = Array.from(document.querySelectorAll('[role="menuitem"], paper-item, mwc-list-item, div[command]'));
+        const item = items.find((el) => /disconnect and delete|delete runtime|disconnect|terminate/i.test(el.textContent || ''));
+        if (item) {
+          clickElement(item);
+          return { clicked: true, debug: 'text-match :: ' + (item.textContent || '').trim().slice(0, 120) };
+        }
+        return { clicked: false, debug: items.map((el) => ({ command: el.getAttribute('command') || '', text: (el.textContent || '').trim().slice(0, 80) })).slice(0, 40).map((x) => x.command + ':' + x.text).join(' | ') };
+      })()
+    `)
+    logColab(
+      `${label} powerwash/disconnect click result: ${result.clicked} (${result.debug || 'no debug'})`
+    )
+    return result.clicked
+  }
+
+  logColab('Clicking powerwash-current-vm / disconnect option (1st attempt)...')
+  const firstClicked = await clickPowerwash('First')
+  await sleep(1500)
+
+  logColab('Clicking powerwash-current-vm / disconnect option (2nd attempt)...')
+  const secondClicked = await clickPowerwash('Second')
+  await sleep(1500)
+
+  if (!firstClicked && !secondClicked) {
+    logColab('⚠️ Failed to find powerwash/disconnect runtime menu item')
+    throw new Error('Failed to find powerwash-current-vm/disconnect runtime menu item')
+  }
+
+  logColab('Looking for confirmation Yes button...')
+  const yesClicked = await clickYesButton(session)
+  logColab(`Disconnect confirmation Yes click result: ${yesClicked}`)
+
+  if (!yesClicked) {
+    logColab('⚠️ Warning: Yes button not found; runtime may still be connected')
+  }
+
+  logColab('Waiting 3 seconds after confirmation...')
+  await sleep(3000)
+  logColab('Runtime disconnect/delete sequence finished')
 }
 
 async function runFreshCell(session: CdpSession, cellSelector: string): Promise<void> {
@@ -546,22 +631,47 @@ async function runFreshCell(session: CdpSession, cellSelector: string): Promise<
       return true;
     })()
   `)
-  logColab(`Fresh cell run click result: ${clicked}`)
+  logColab(`Fresh cell run click result: ${clicked ? '✓ Success' : '⚠️ Failed'}`)
 }
 
-async function resetRuntime(session: CdpSession): Promise<void> {
+async function resetRuntime(session: CdpSession, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal)
   logColab('Reset runtime sequence started')
+  logColab('Step 5.1: Clicking Run button...')
   await clickRunButton(session)
-  logColab('Run button clicked, immediately disconnecting runtime')
+  logColab('Run button clicked successfully')
+
+  throwIfAborted(signal)
+  logColab('Step 5.2: Waiting 10 seconds before disconnecting...')
+  await sleep(10000)
+
+  throwIfAborted(signal)
+  logColab('Step 5.3: Disconnecting and deleting runtime...')
   await disconnectRuntime(session)
-  logColab('Waiting 20s after runtime disconnect')
-  await sleep(20000)
+  logColab('Runtime disconnected')
+
+  throwIfAborted(signal)
+  logColab('Step 5.4: Waiting 10 seconds after disconnect...')
+  await sleep(10000)
+
+  throwIfAborted(signal)
+  logColab('Step 5.5: Clicking Run button again...')
+  await clickRunButton(session)
+  logColab('Run button clicked again, runtime reset complete')
 }
 
-async function runCellAndExtractProxy(session: CdpSession, cellSelector: string): Promise<string> {
-  logColab(`Waiting for proxy output in cell: ${cellSelector}`)
+async function runCellAndExtractProxy(
+  session: CdpSession,
+  cellSelector: string,
+  signal?: AbortSignal
+): Promise<string> {
+  logColab(`Step 6.1: Waiting for proxy output in cell: ${cellSelector}`)
+  logColab('Will check every second; caller enforces a 60 second overall timeout...')
+
   for (let attempt = 1; attempt <= 120; attempt++) {
+    throwIfAborted(signal)
     await sleep(1000)
+    throwIfAborted(signal)
     const result = await session.evaluate<{ found: boolean; proxy?: string; debug?: string }>(`
       (() => {
         const cell = document.querySelector(${JSON.stringify(cellSelector)});
@@ -588,39 +698,72 @@ async function runCellAndExtractProxy(session: CdpSession, cellSelector: string)
       const proxy = result.proxy
         .replace(/^socks5:\/\//, 'socks5://')
         .replace(/^socks5:/, 'socks5://')
-      logColab(`Proxy extracted on attempt ${attempt}: ${proxy}`)
+      logColab(`✓ Proxy extracted on attempt ${attempt}: ${proxy}`)
       return proxy
     }
     if (attempt === 1 || attempt % 15 === 0) {
-      logColab(`Proxy not found yet (attempt ${attempt}/120): ${result.debug || 'no output'}`)
+      logColab(`⏳ Proxy not found yet (attempt ${attempt}/120): ${result.debug || 'no output'}`)
     }
     if (attempt === 45 || attempt === 90) {
-      logColab(`Retrying cell run at attempt ${attempt}`)
+      logColab(`🔄 Retrying cell run at attempt ${attempt}`)
       await runFreshCell(session, cellSelector)
       await sleep(15000)
     }
   }
-  throw new Error('Timeout extracting proxy from Colab output')
+  throw new Error('Timeout extracting proxy from Colab output after 120 seconds')
 }
 
 export async function generateColabProxy(config: GenerateColabProxyConfig): Promise<string> {
-  logColab('Generate Colab proxy requested')
-  const cdpBase = normalizeCdpAddress(config.cdpAddress)
-  const notebookUrl = config.formUrl?.trim() || DEFAULT_COLAB_URL
-  const target = await findOrOpenColabTarget(cdpBase, notebookUrl)
-  if (!target?.webSocketDebuggerUrl) throw new Error('Colab CDP target has no WebSocket URL')
-
-  const session = new CdpSession(target.webSocketDebuggerUrl)
-  logColab('Connecting to Colab CDP WebSocket')
-  await session.connect()
+  const previousLogSink = activeColabLogSink
+  activeColabLogSink = config.onLog
   try {
-    await session.send('Runtime.enable')
-    const cellSelector = config.cellSelector?.trim() || DEFAULT_CELL_SELECTOR
-    logColab(`Using cell selector: ${cellSelector}`)
-    await resetRuntime(session)
-    return await runCellAndExtractProxy(session, cellSelector)
+    throwIfAborted(config.signal)
+    logColab('=== Generate Colab proxy requested ===')
+    logColab(`CDP Address: ${config.cdpAddress || '127.0.0.1:9229'}`)
+    logColab(`Form URL: ${config.formUrl || DEFAULT_COLAB_URL}`)
+    logColab(`Cell Selector: ${config.cellSelector || DEFAULT_CELL_SELECTOR}`)
+
+    const cdpBase = normalizeCdpAddress(config.cdpAddress)
+    const notebookUrl = config.formUrl?.trim() || DEFAULT_COLAB_URL
+
+    logColab('Step 1: Finding or opening Colab target...')
+    throwIfAborted(config.signal)
+    const target = await findOrOpenColabTarget(cdpBase, notebookUrl)
+    if (!target?.webSocketDebuggerUrl) throw new Error('Colab CDP target has no WebSocket URL')
+    logColab(`Target found: ${target.id}`)
+
+    const session = new CdpSession(target.webSocketDebuggerUrl)
+    logColab('Step 2: Connecting to Colab CDP WebSocket...')
+    throwIfAborted(config.signal)
+    await session.connect()
+    logColab('WebSocket connected successfully')
+
+    try {
+      throwIfAborted(config.signal)
+      logColab('Step 3: Enabling Runtime...')
+      await session.send('Runtime.enable')
+      logColab('Runtime enabled')
+
+      const cellSelector = config.cellSelector?.trim() || DEFAULT_CELL_SELECTOR
+      logColab(`Step 4: Using cell selector: ${cellSelector}`)
+
+      logColab(
+        'Step 5: Resetting runtime (click Run, wait 10s, Runtime > Disconnect/delete runtime, wait 10s, click Run)...'
+      )
+      await resetRuntime(session, config.signal)
+      logColab('Runtime reset complete')
+
+      throwIfAborted(config.signal)
+      logColab('Step 6: Running cell and extracting proxy...')
+      const proxy = await runCellAndExtractProxy(session, cellSelector, config.signal)
+      logColab(`=== Proxy generation successful: ${proxy} ===`)
+      return proxy
+    } finally {
+      logColab('Closing Colab CDP session')
+      session.close()
+      activeColabLogSink = previousLogSink
+    }
   } finally {
-    logColab('Closing Colab CDP session')
-    session.close()
+    activeColabLogSink = previousLogSink
   }
 }

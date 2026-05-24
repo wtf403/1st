@@ -1382,8 +1382,10 @@ export async function callKiroApiStream(
       lastError = error instanceof Error ? error : new Error(describeError(error))
       console.error(`[KiroAPI] Endpoint ${endpoint.name} failed: ${describeError(error)}`)
 
-      // 如果是认证错误，不继续尝试其他端点
-      if (lastError.message.includes('Auth error')) {
+      // AmazonQ can return 403 for tokens that are only valid on CodeWhisperer (and
+      // vice-versa). Do not stop endpoint fallback on auth errors unless the user
+      // explicitly selected a single isolated endpoint.
+      if (lastError.message.includes('Auth error') && preferredEndpoint === 'amazonq-cli') {
         onError(lastError)
         return
       }

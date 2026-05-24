@@ -8,6 +8,8 @@ import {
   DuckDuckGoEmailService,
   MoEmailService,
   TempMailPlusService,
+  ProvidedEmailService,
+  parseProvidedEmailLines,
   GmailIMAPAccount
 } from './email-service'
 import { randomFullName } from './browser-identity'
@@ -27,10 +29,14 @@ export interface BrowserRegistrationConfig {
   tempMailPlusDomain?: string
   moEmailBaseURL?: string
   moEmailAPIKey?: string
+  providedEmailData?: string
+  providedEmailApiKey?: string
+  providedEmailApiBaseURL?: string
   fullName?: string
   password?: string
   proxyUrl?: string
   taskId?: string
+  consumedProvidedEmailLine?: string
 }
 
 const OIDC_BASE = 'https://oidc.us-east-1.amazonaws.com'
@@ -258,11 +264,17 @@ export class BrowserRegistrar {
   private sessionPartition: string
   private aborted = false
   private emailSvc: TempEmailService | null = null
+  private consumedProvidedEmailLine: string | null = null
 
   constructor(cfg: BrowserRegistrationConfig, log?: LogFn) {
     this.cfg = cfg
     this.log = log || ((msg) => console.log(msg))
     this.sessionPartition = `persist:reg-${cfg.taskId || Date.now()}`
+    this.log(`[Browser] New registration session created: ${this.sessionPartition}`)
+    this.log(
+      `[Browser] Method: ${cfg.useDDG ? 'DuckDuckGo/Gmail' : cfg.useTempMailPlus ? 'TempMail.Plus' : cfg.providedEmailData ? 'Provided Email' : 'MoEmail'}`
+    )
+    this.log(`[Browser] Proxy configured: ${cfg.proxyUrl ? cfg.proxyUrl : 'none'}`)
   }
 
   abort(): void {
@@ -286,22 +298,30 @@ export class BrowserRegistrar {
   }
 
   async destroy(): Promise<void> {
+    this.log(`[Browser] Destroying registration session: ${this.sessionPartition}`)
     this.destroyWindow()
     try {
       const ses = session.fromPartition(this.sessionPartition)
       await ses.clearStorageData()
       await ses.clearCache()
-    } catch {
-      /* ignore */
+      this.log('[Browser] Registration session storage/cache cleared')
+    } catch (error) {
+      this.log(
+        `[Browser] Warning: failed to clear session storage/cache: ${error instanceof Error ? error.message : String(error)}`
+      )
     }
   }
 
   private async createWindow(): Promise<BrowserWindow> {
+    this.log(`[Browser] Creating Electron session/window for partition: ${this.sessionPartition}`)
     const ses = session.fromPartition(this.sessionPartition)
 
     if (this.cfg.proxyUrl) {
+      this.log(`[Browser] Applying proxy rules: ${this.cfg.proxyUrl}`)
       await ses.setProxy({ proxyRules: this.cfg.proxyUrl })
-      this.log(`[Browser] Proxy: ${this.cfg.proxyUrl}`)
+      this.log(`[Browser] Proxy applied: ${this.cfg.proxyUrl}`)
+    } else {
+      this.log('[Browser] No proxy configured; using direct/system network')
     }
 
     const cleanUA = ses
@@ -336,6 +356,7 @@ export class BrowserRegistrar {
     })
 
     this.win = win
+    this.log('[Browser] Registration window created successfully')
     return win
   }
 
@@ -371,6 +392,23 @@ export class BrowserRegistrar {
       const addr = await svc.create()
       if (!addr) throw new Error('TempMailPlus address creation failed')
       this.emailSvc = svc
+      return addr
+    }
+
+    if (this.cfg.providedEmailData) {
+      const accounts = parseProvidedEmailLines(this.cfg.providedEmailData)
+      if (accounts.length === 0) throw new Error('No valid provided email accounts')
+      const account = accounts[0]
+      const svc = new ProvidedEmailService(
+        account,
+        this.cfg.providedEmailApiKey || '',
+        this.cfg.providedEmailApiBaseURL || 'https://firstmail.ltd/api/v1'
+      )
+      const addr = await svc.create()
+      if (!addr) throw new Error('Provided email address creation failed')
+      this.emailSvc = svc
+      this.cfg.password = account.password
+      this.consumedProvidedEmailLine = `${account.email}:${account.password}`
       return addr
     }
 
@@ -932,6 +970,7 @@ export class BrowserRegistrar {
 
   async run(): Promise<RegistrationResult> {
     console.log('[BrowserRegistrar] run() started')
+    this.log('[Browser] Starting registration flow')
 
     let email: string
     try {
@@ -944,6 +983,9 @@ export class BrowserRegistrar {
 
     const fullName = this.cfg.fullName || randomFullName()
     const password = this.cfg.password || genPassword()
+    this.log(
+      `[Browser] Identity prepared: name=${fullName}, password=${this.cfg.password ? 'provided' : 'generated'}`
+    )
 
     console.log(`[BrowserRegistrar] Email: ${email}`)
     this.log(`[Browser] Email: ${email}`)
@@ -1138,7 +1180,8 @@ export class BrowserRegistrar {
         refreshToken: (tokenData.refreshToken as string) || '',
         accessToken: (tokenData.accessToken as string) || '',
         region: 'us-east-1',
-        provider: 'BuilderId'
+        provider: 'BuilderId',
+        consumedProvidedEmailLine: this.consumedProvidedEmailLine || undefined
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

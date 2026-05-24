@@ -1267,6 +1267,9 @@ interface KiroApi {
     tempMailPlusDomain?: string
     moEmailBaseURL?: string
     moEmailAPIKey?: string
+    providedEmailData?: string
+    providedEmailApiKey?: string
+    providedEmailApiBaseURL?: string
     fullName?: string
     password?: string
     proxyUrl?: string
@@ -1289,6 +1292,9 @@ interface KiroApi {
     tempMailPlusEmail?: string
     tempMailPlusEpin?: string
     tempMailPlusDomain?: string
+    providedEmailData?: string
+    providedEmailApiKey?: string
+    providedEmailApiBaseURL?: string
     proxyUrl?: string
     generateProxyEachTime?: boolean
     proxyCdpAddress?: string
@@ -1297,7 +1303,11 @@ interface KiroApi {
     scheduledIntervalMin?: number
     scheduledStartTime?: string
     scheduledEndTime?: string
-    scheduledMethod?: 'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
+    scheduledMethod?:
+      | 'browser-ddg'
+      | 'browser-tempmail'
+      | 'browser-moemail'
+      | 'browser-provided-email'
   }>
 
   registrationSaveAutoReplacementConfig: (config: {
@@ -1310,6 +1320,9 @@ interface KiroApi {
     tempMailPlusEmail?: string
     tempMailPlusEpin?: string
     tempMailPlusDomain?: string
+    providedEmailData?: string
+    providedEmailApiKey?: string
+    providedEmailApiBaseURL?: string
     proxyUrl?: string
     generateProxyEachTime?: boolean
     proxyCdpAddress?: string
@@ -1318,7 +1331,11 @@ interface KiroApi {
     scheduledIntervalMin?: number
     scheduledStartTime?: string
     scheduledEndTime?: string
-    scheduledMethod?: 'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
+    scheduledMethod?:
+      | 'browser-ddg'
+      | 'browser-tempmail'
+      | 'browser-moemail'
+      | 'browser-provided-email'
   }) => Promise<{ success: boolean; error?: string }>
 
   registrationCancelBrowser: (taskId?: string) => Promise<{ success: boolean }>

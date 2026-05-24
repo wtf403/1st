@@ -45,6 +45,349 @@ export interface TempEmailService {
   getAddress(): string
 }
 
+// ============ Provided email:password IMAP mailboxes ============
+
+export interface ProvidedEmailAccount {
+  email: string
+  password: string
+}
+
+export function parseProvidedEmailLines(data: string): ProvidedEmailAccount[] {
+  return data
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const idx = line.indexOf(':')
+      if (idx <= 0) return null
+      const email = line.slice(0, idx).trim()
+      const password = line.slice(idx + 1).trim()
+      if (!email || !password || !email.includes('@')) return null
+      return { email, password }
+    })
+    .filter((item): item is ProvidedEmailAccount => Boolean(item))
+}
+
+class GenericIMAPClient {
+  private socket: tls.TLSSocket | null = null
+  private buffer = ''
+  private tagCounter = 0
+
+  async connect(host: string, port = 993): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = tls.connect(port, host, { servername: host })
+      const timer = setTimeout(() => {
+        socket.destroy()
+        reject(new Error(`Connect timeout: ${host}:${port}`))
+      }, 15000)
+      socket.once('error', (err) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+      socket.once('secureConnect', () => {
+        clearTimeout(timer)
+        this.socket = socket
+        this.readLine()
+          .then(() => resolve())
+          .catch(reject)
+      })
+    })
+  }
+
+  private readLine(): Promise<string> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) return reject(new Error('Not connected'))
+      const check = (): void => {
+        const idx = this.buffer.indexOf('\r\n')
+        if (idx >= 0) {
+          const line = this.buffer.slice(0, idx)
+          this.buffer = this.buffer.slice(idx + 2)
+          resolve(line)
+        }
+      }
+      check()
+      const onData = (chunk: Buffer): void => {
+        this.buffer += chunk.toString('utf8')
+        const idx = this.buffer.indexOf('\r\n')
+        if (idx >= 0) {
+          this.socket!.removeListener('data', onData)
+          const line = this.buffer.slice(0, idx)
+          this.buffer = this.buffer.slice(idx + 2)
+          resolve(line)
+        }
+      }
+      this.socket.on('data', onData)
+      this.socket.once('error', reject)
+    })
+  }
+
+  private async sendCommand(cmd: string): Promise<string> {
+    if (!this.socket) throw new Error('Not connected')
+    this.tagCounter++
+    const tag = `G${String(this.tagCounter).padStart(3, '0')}`
+    this.socket.write(`${tag} ${cmd}\r\n`)
+    return tag
+  }
+
+  private async readUntilTag(tag: string): Promise<{ lines: string[]; result: string }> {
+    const lines: string[] = []
+    while (true) {
+      const line = await this.readLine()
+      if (line.startsWith(`${tag} `)) return { lines, result: line }
+      lines.push(line)
+    }
+  }
+
+  async login(email: string, password: string): Promise<void> {
+    const esc = (v: string): string => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const tag = await this.sendCommand(`LOGIN "${esc(email)}" "${esc(password)}"`)
+    const { result } = await this.readUntilTag(tag)
+    if (!/OK/i.test(result)) throw new Error(`LOGIN failed: ${result}`)
+  }
+
+  async selectInbox(): Promise<void> {
+    const tag = await this.sendCommand('SELECT INBOX')
+    const { result } = await this.readUntilTag(tag)
+    if (!/OK/i.test(result)) throw new Error(`SELECT INBOX failed: ${result}`)
+  }
+
+  async searchFromUid(sender: string, minUid: string): Promise<string[]> {
+    const tag = await this.sendCommand(`UID SEARCH UID ${minUid}:* FROM "${sender}"`)
+    const { lines, result } = await this.readUntilTag(tag)
+    if (!/OK/i.test(result)) throw new Error(`SEARCH failed: ${result}`)
+    const found: string[] = []
+    for (const line of lines) {
+      const m = line.match(/^\* SEARCH\s*(.*)$/i)
+      if (m?.[1]) found.push(...m[1].trim().split(/\s+/).filter(Boolean))
+    }
+    return found
+  }
+
+  async fetchBodyByUID(uid: string): Promise<string> {
+    const tag = await this.sendCommand(`UID FETCH ${uid} (BODY.PEEK[])`)
+    const { lines, result } = await this.readUntilTag(tag)
+    if (!/OK/i.test(result)) throw new Error(`FETCH failed: ${result}`)
+    return decodeMimeBody(lines.join('\n'))
+  }
+
+  async markSeen(uid: string): Promise<void> {
+    const tag = await this.sendCommand(`UID STORE ${uid} +FLAGS (\\Seen)`)
+    await this.readUntilTag(tag).catch(() => undefined)
+  }
+
+  close(): void {
+    if (this.socket) {
+      try {
+        this.socket.write('G999 LOGOUT\r\n')
+      } catch {
+        /* ignore */
+      }
+      this.socket.destroy()
+      this.socket = null
+    }
+  }
+}
+
+export class ProvidedEmailService implements TempEmailService {
+  private readonly account: ProvidedEmailAccount
+  private readonly hosts: string[]
+  private address = ''
+  private host = ''
+  private baselineAwsUid = '0'
+  private baselineTime = 0
+  private readonly apiKey: string
+  private readonly apiBaseURL: string
+
+  constructor(
+    account: ProvidedEmailAccount,
+    apiKey = '',
+    apiBaseURL = 'https://firstmail.ltd/api/v1'
+  ) {
+    this.account = account
+    this.apiKey = apiKey
+    this.apiBaseURL = apiBaseURL.replace(/\/+$/, '')
+    const domain = account.email.split('@')[1]
+    this.hosts = [`imap.${domain}`, `mail.${domain}`, domain]
+  }
+
+  async create(): Promise<string> {
+    this.address = this.account.email
+    return this.address
+  }
+
+  getAddress(): string {
+    return this.address
+  }
+
+  async beforeSendCode(): Promise<void> {
+    this.baselineTime = Date.now()
+    if (this.apiKey) {
+      console.log(
+        `[FirstMail] Baseline time before OTP send: ${new Date(this.baselineTime).toISOString()}`
+      )
+      return
+    }
+    try {
+      this.baselineAwsUid = await this.getLatestAwsUid()
+      console.log(`[ProvidedEmail] Baseline AWS mail UID before OTP send: ${this.baselineAwsUid}`)
+    } catch (err) {
+      console.log(
+        `[ProvidedEmail] Failed to capture baseline (will use 0): ${err instanceof Error ? err.message : String(err)}`
+      )
+      this.baselineAwsUid = '0'
+    }
+  }
+
+  async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
+    if (!this.address) throw new Error('邮箱地址为空')
+    if (this.apiKey) return this.waitForCodeViaFirstMailAPI(timeoutSec, intervalSec)
+
+    const maxRetries = Math.floor(timeoutSec / intervalSec)
+    const checkedUids = new Set<string>()
+    const minUid = String((Number.parseInt(this.baselineAwsUid || '0', 10) || 0) + 1)
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      await sleep(intervalSec * 1000)
+      let client: GenericIMAPClient | null = null
+      try {
+        client = await this.connectClient()
+        const uids = await client.searchFromUid('no-reply@signin.aws', minUid)
+        const sortedUids = uids.sort((a, b) => Number.parseInt(b, 10) - Number.parseInt(a, 10))
+        if (attempt === 1 || attempt % 5 === 0) {
+          console.log(
+            `[ProvidedEmail] [${attempt}/${maxRetries}] AWS UIDs: [${sortedUids.join(',')}]`
+          )
+        }
+        for (const uid of sortedUids.slice(0, 10)) {
+          if (checkedUids.has(uid)) continue
+          checkedUids.add(uid)
+          const body = await client.fetchBodyByUID(uid)
+          const code = extractCode(body)
+          if (code) {
+            console.log(`[ProvidedEmail] 验证码: ${code}`)
+            await client.markSeen(uid)
+            return code
+          }
+        }
+      } catch (err) {
+        if (attempt % 5 === 0) {
+          console.log(`[ProvidedEmail] [${attempt}/${maxRetries}] 查询失败:`, err)
+        }
+      } finally {
+        client?.close()
+      }
+    }
+    throw new Error(`等待验证码超时 (${timeoutSec}s)`)
+  }
+
+  private async waitForCodeViaFirstMailAPI(
+    timeoutSec: number,
+    intervalSec: number
+  ): Promise<string> {
+    const maxRetries = Math.floor(timeoutSec / intervalSec)
+    const checkedIds = new Set<string>()
+    const baseline = this.baselineTime || Date.now()
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      await sleep(intervalSec * 1000)
+      try {
+        const messages = await this.fetchFirstMailMessages()
+        if (attempt === 1 || attempt % 5 === 0) {
+          console.log(`[FirstMail] [${attempt}/${maxRetries}] messages: ${messages.length}`)
+        }
+
+        for (const msg of messages) {
+          const id = String(msg.id || msg.uid || `${msg.date || ''}-${msg.subject || ''}`)
+          if (checkedIds.has(id)) continue
+
+          const msgTime = Date.parse(String(msg.date || msg.created_at || ''))
+          if (Number.isFinite(msgTime) && msgTime + 10000 < baseline) continue
+
+          const sender = String(msg.from || '').toLowerCase()
+          const subject = String(msg.subject || '')
+          const text = String(msg.body_text || '')
+          const html = String(msg.body_html || '')
+          const body = `${subject}\n${text}\n${html}`
+          const code = extractCode(body)
+          const looksLikeAws = sender.includes('no-reply@signin.aws') || /aws|amazon/i.test(body)
+
+          if (code && looksLikeAws) {
+            console.log(`[FirstMail] 验证码: ${code}`)
+            checkedIds.add(id)
+            return code
+          }
+          checkedIds.add(id)
+        }
+      } catch (err) {
+        if (attempt % 5 === 0) console.log(`[FirstMail] [${attempt}/${maxRetries}] 查询失败:`, err)
+      }
+    }
+    throw new Error(`等待验证码超时 (${timeoutSec}s)`)
+  }
+
+  private async fetchFirstMailMessages(): Promise<Array<Record<string, unknown>>> {
+    const resp = await proxyFetch(`${this.apiBaseURL}/email/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-KEY': this.apiKey
+      },
+      body: JSON.stringify({
+        email: this.account.email,
+        password: this.account.password,
+        limit: 20,
+        folder: 'INBOX'
+      }),
+      signal: AbortSignal.timeout(20000)
+    })
+
+    const raw = (await resp.json()) as Record<string, unknown>
+    if (!resp.ok || raw.success === false) {
+      throw new Error(
+        `FirstMail API error ${resp.status}: ${String(raw.error || JSON.stringify(raw)).slice(0, 300)}`
+      )
+    }
+    const data = raw.data as Record<string, unknown> | undefined
+    if (Array.isArray(data?.messages)) return data.messages as Array<Record<string, unknown>>
+    if (Array.isArray(raw.messages)) return raw.messages as Array<Record<string, unknown>>
+    return []
+  }
+
+  private async getLatestAwsUid(): Promise<string> {
+    const client = await this.connectClient()
+    try {
+      const uids = await client.searchFromUid('no-reply@signin.aws', '1')
+      if (uids.length === 0) return '0'
+      return uids.reduce((max, uid) =>
+        Number.parseInt(uid, 10) > Number.parseInt(max, 10) ? uid : max
+      )
+    } finally {
+      client.close()
+    }
+  }
+
+  private async connectClient(): Promise<GenericIMAPClient> {
+    const hosts = this.host ? [this.host, ...this.hosts.filter((h) => h !== this.host)] : this.hosts
+    let lastError: unknown
+    for (const host of hosts) {
+      const client = new GenericIMAPClient()
+      try {
+        await client.connect(host)
+        await client.login(this.account.email, this.account.password)
+        await client.selectInbox()
+        this.host = host
+        return client
+      } catch (err) {
+        client.close()
+        lastError = err
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(String(lastError || 'IMAP connect failed'))
+  }
+}
+
 // ============ MoEmail 临时邮箱 ============
 
 export class MoEmailService implements TempEmailService {

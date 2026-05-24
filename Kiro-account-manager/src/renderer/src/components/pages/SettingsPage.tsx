@@ -230,7 +230,7 @@ export function SettingsPage() {
   const [scheduledRegisterStartTime, setScheduledRegisterStartTime] = useState('00:00')
   const [scheduledRegisterEndTime, setScheduledRegisterEndTime] = useState('00:00')
   const [scheduledRegisterMethod, setScheduledRegisterMethod] = useState<
-    'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
+    'browser-ddg' | 'browser-tempmail' | 'browser-moemail' | 'browser-provided-email'
   >('browser-ddg')
   const [scheduledRegisterLoading, setScheduledRegisterLoading] = useState(true)
 
@@ -898,7 +898,11 @@ export function SettingsPage() {
                       scheduledRegisterIntervalMin,
                       scheduledRegisterStartTime,
                       scheduledRegisterEndTime,
-                      e.target.value as 'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
+                      e.target.value as
+                        | 'browser-ddg'
+                        | 'browser-tempmail'
+                        | 'browser-moemail'
+                        | 'browser-provided-email'
                     )
                   }
                   disabled={scheduledRegisterLoading}
@@ -906,6 +910,9 @@ export function SettingsPage() {
                   <option value="browser-ddg">Browser DDG</option>
                   <option value="browser-tempmail">Browser TempMail.Plus</option>
                   <option value="browser-moemail">Browser MoEmail</option>
+                  <option value="browser-provided-email">
+                    {isEn ? 'Browser Email Provider' : '浏览器邮箱提供商'}
+                  </option>
                 </select>
               </div>
               <div className="flex items-center justify-between">

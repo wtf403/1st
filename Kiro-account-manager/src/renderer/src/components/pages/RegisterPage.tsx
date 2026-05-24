@@ -42,6 +42,7 @@ type RegMode =
   | 'ddg'
   | 'browser-ddg'
   | 'browser-tempmail'
+  | 'browser-provided-email'
 type Phase = 'idle' | 'initializing' | 'email' | 'otp' | 'running' | 'done'
 
 interface RegResult {
@@ -56,7 +57,7 @@ interface RegResult {
   region?: string
   provider?: string
   verify?: Record<string, unknown>
-  fingerprint?: FingerprintSnapshot
+  consumedProvidedEmailLine?: string
 }
 
 type BatchItemStatus =
@@ -240,6 +241,9 @@ interface RegisterConfig {
   ddgGmailEmail: string
   ddgGmailAppPassword: string
   proxyUrl: string
+  providedEmailData: string
+  providedEmailApiKey: string
+  providedEmailApiBaseURL: string
   generateProxyEachTime: boolean
   proxyCdpAddress: string
   proxyFormUrl: string
@@ -259,6 +263,20 @@ function saveConfig(cfg: RegisterConfig): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg))
   } catch {
     /* ignore */
+  }
+}
+
+function takeFirstProvidedEmailLine(data: string): { line: string; remaining: string } | null {
+  const lines = data.split(/\r?\n/)
+  const idx = lines.findIndex((line) => {
+    const trimmed = line.trim()
+    const sep = trimmed.indexOf(':')
+    return sep > 0 && trimmed.slice(0, sep).includes('@') && trimmed.slice(sep + 1).length > 0
+  })
+  if (idx < 0) return null
+  return {
+    line: lines[idx].trim(),
+    remaining: [...lines.slice(0, idx), ...lines.slice(idx + 1)].join('\n')
   }
 }
 
@@ -302,6 +320,11 @@ export function RegisterPage(): React.JSX.Element {
   const [ddgGmailEmail, setDdgGmailEmail] = useState(saved.ddgGmailEmail || '')
   const [ddgGmailAppPassword, setDdgGmailAppPassword] = useState(saved.ddgGmailAppPassword || '')
   const [proxyUrl, setProxyUrl] = useState(saved.proxyUrl || '')
+  const [providedEmailData, setProvidedEmailData] = useState(saved.providedEmailData || '')
+  const [providedEmailApiKey, setProvidedEmailApiKey] = useState(saved.providedEmailApiKey || '')
+  const [providedEmailApiBaseURL, setProvidedEmailApiBaseURL] = useState(
+    saved.providedEmailApiBaseURL || 'https://firstmail.ltd/api/v1'
+  )
   const [generateProxyEachTime, setGenerateProxyEachTime] = useState(
     saved.generateProxyEachTime ?? false
   )
@@ -511,13 +534,25 @@ export function RegisterPage(): React.JSX.Element {
               ? 'Browser (DDG)'
               : mode === 'browser-tempmail'
                 ? 'Browser (TempMail)'
-                : 'Outlook'
+                : mode === 'browser-provided-email'
+                  ? 'Browser (Email Provider)'
+                  : 'Outlook'
     addLog(t('register.logAutoStart').replace('{mode}', modeLabel))
 
     if (isBrowserMode) {
       let config: Parameters<typeof window.api.registrationStartBrowser>[0]
       try {
         config = await prepareBrowserConfig()
+        if (mode === 'browser-provided-email') {
+          const picked = takeFirstProvidedEmailLine(providedEmailData)
+          if (!picked)
+            throw new Error(
+              isEn ? 'No valid email:password line available' : '没有可用的 email:password 行'
+            )
+          setProvidedEmailData(picked.remaining)
+          config.providedEmailData = picked.line
+          addLog(`${isEn ? 'Reserved email' : '已预留邮箱'}: ${picked.line.split(':')[0]}`)
+        }
       } catch (error) {
         addLog(
           `${t('register.logStartFailed')} ${error instanceof Error ? error.message : String(error)}`
@@ -956,11 +991,18 @@ export function RegisterPage(): React.JSX.Element {
       ddgGmailEmail,
       ddgGmailAppPassword,
       proxyUrl,
+      providedEmailData,
+      providedEmailApiKey,
+      providedEmailApiBaseURL,
       generateProxyEachTime,
       proxyCdpAddress,
       proxyFormUrl
     })
-    if (mode === 'browser-ddg' || mode === 'browser-tempmail') {
+    if (
+      mode === 'browser-ddg' ||
+      mode === 'browser-tempmail' ||
+      mode === 'browser-provided-email'
+    ) {
       window.api
         .registrationSaveAutoReplacementConfig({
           enabled: true,
@@ -972,6 +1014,13 @@ export function RegisterPage(): React.JSX.Element {
           tempMailPlusEmail: tempMailEmail,
           tempMailPlusEpin: tempMailEpin,
           tempMailPlusDomain: tempMailDomain,
+          providedEmailData: mode === 'browser-provided-email' ? providedEmailData : undefined,
+          providedEmailApiKey:
+            mode === 'browser-provided-email' ? providedEmailApiKey.trim() || undefined : undefined,
+          providedEmailApiBaseURL:
+            mode === 'browser-provided-email'
+              ? providedEmailApiBaseURL.trim() || undefined
+              : undefined,
           proxyUrl: generateProxyEachTime ? undefined : proxyUrl.trim() || undefined,
           generateProxyEachTime,
           proxyCdpAddress,
@@ -1000,6 +1049,9 @@ export function RegisterPage(): React.JSX.Element {
     ddgGmailEmail,
     ddgGmailAppPassword,
     proxyUrl,
+    providedEmailData,
+    providedEmailApiKey,
+    providedEmailApiBaseURL,
     generateProxyEachTime,
     proxyCdpAddress,
     proxyFormUrl
@@ -1310,6 +1362,10 @@ export function RegisterPage(): React.JSX.Element {
       config.tempMailPlusEmail = tempMailEmail
       config.tempMailPlusEpin = tempMailEpin
       config.tempMailPlusDomain = tempMailDomain
+    } else if (mode === 'browser-provided-email') {
+      config.providedEmailData = providedEmailData
+      config.providedEmailApiKey = providedEmailApiKey.trim() || undefined
+      config.providedEmailApiBaseURL = providedEmailApiBaseURL.trim() || undefined
     }
     if (!generateProxyEachTime && proxyUrl.trim()) config.proxyUrl = proxyUrl.trim()
     return config
@@ -1321,6 +1377,9 @@ export function RegisterPage(): React.JSX.Element {
     tempMailEmail,
     tempMailEpin,
     tempMailDomain,
+    providedEmailData,
+    providedEmailApiKey,
+    providedEmailApiBaseURL,
     proxyUrl,
     generateProxyEachTime
   ])
@@ -1352,7 +1411,8 @@ export function RegisterPage(): React.JSX.Element {
     [buildBrowserConfig, generateProxyEachTime, proxyCdpAddress, proxyFormUrl, addLog, isEn]
   )
 
-  const isBrowserMode = mode === 'browser-ddg' || mode === 'browser-tempmail'
+  const isBrowserMode =
+    mode === 'browser-ddg' || mode === 'browser-tempmail' || mode === 'browser-provided-email'
 
   // 执行单次注册（含重试）
   const runSingleWithRetry = useCallback(
@@ -1551,25 +1611,26 @@ export function RegisterPage(): React.JSX.Element {
 
     const config = isBrowserMode ? buildBrowserConfig() : buildAutoConfig()
     const concurrency = Math.max(1, batchConcurrency)
-    const totalCount = items.length
-
-    // 初始化 Outlook 单行池（avoid 并发抢占）—— 仅当 outlook / mixed 启用且填了 outlookData
-    const needsOutlook = mode === 'outlook' || (mode === 'mixed' && mixedEnabledSources.includes('outlook'))
-    if (needsOutlook && outlookData.trim()) {
-      const lines = outlookData.split('\n').map((s) => s.trim()).filter((s) => s.includes('----'))
-      // Fisher-Yates shuffle
-      for (let i = lines.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1))
-        ;[lines[i], lines[j]] = [lines[j], lines[i]]
+    let reservedProvidedLines: string[] = []
+    if (mode === 'browser-provided-email') {
+      let remaining = providedEmailData
+      for (let i = 0; i < batchCount; i++) {
+        const picked = takeFirstProvidedEmailLine(remaining)
+        if (!picked) break
+        reservedProvidedLines.push(picked.line)
+        remaining = picked.remaining
       }
-      outlookPoolRef.current = lines
-      if (lines.length < totalCount) {
-        addLog(`[Outlook] 警告：邮箱池仅 ${lines.length} 个，本批 ${totalCount} 个任务，超出部分将随机复用（可能撞号）`)
-      } else {
-        addLog(`[Outlook] 邮箱池已就绪 (${lines.length} 个，shuffle 后分配)`)
+      if (reservedProvidedLines.length === 0) {
+        addLog(isEn ? 'No valid email:password lines available' : '没有可用的 email:password 行')
+        setBatchRunning(false)
+        return
       }
-    } else {
-      outlookPoolRef.current = []
+      if (reservedProvidedLines.length < batchCount) {
+        addLog(
+          `${isEn ? 'Only reserved' : '只预留了'} ${reservedProvidedLines.length}/${batchCount} ${isEn ? 'email accounts' : '个邮箱账号'}`
+        )
+      }
+      setProvidedEmailData(remaining)
     }
 
     setPhase('running')
@@ -1621,8 +1682,10 @@ export function RegisterPage(): React.JSX.Element {
     // 并发池执行
     const executing = new Set<Promise<void>>()
     let launched = 0
+    const launchCount =
+      mode === 'browser-provided-email' ? reservedProvidedLines.length : batchCount
 
-    for (let i = 0; i < items.length; i++) {
+    for (let i = 0; i < launchCount; i++) {
       if (batchAbort.current) {
         addLog(
           t('register.batchStopped')
@@ -1646,11 +1709,20 @@ export function RegisterPage(): React.JSX.Element {
 
       const itemId = items[i].id
       const taskId = `batch-${itemId.slice(0, 8)}`
-      addLog(`--- Batch ${i + 1}/${totalCount} ---`)
+      const taskConfig =
+        mode === 'browser-provided-email'
+          ? ({ ...config, providedEmailData: reservedProvidedLines[i] } as typeof config)
+          : config
+      addLog(`--- Batch ${i + 1}/${launchCount} ---`)
+      if (mode === 'browser-provided-email') {
+        addLog(
+          `${isEn ? 'Reserved email' : '已预留邮箱'}: ${reservedProvidedLines[i].split(':')[0]}`
+        )
+      }
       launched++
 
       const task = (async () => {
-        const outcome = await runSingleWithRetry(itemId, taskId, batchRetries)
+        const outcome = await runSingleWithRetry(itemId, taskId, batchRetries, taskConfig)
         await handleBatchOutcome(itemId, outcome)
         // 上报限速器结果（用于动态退避 + 风控判定）
         if (rateLimiterRef.current) {
@@ -1674,7 +1746,7 @@ export function RegisterPage(): React.JSX.Element {
       }
 
       // 每次启动任务后等待间隔（0 则不等待）
-      if (i < items.length - 1 && !batchAbort.current && batchInterval > 0) {
+      if (i < launchCount - 1 && !batchAbort.current && batchInterval > 0) {
         await new Promise((r) => setTimeout(r, batchInterval * 1000))
       }
     }
@@ -1883,7 +1955,11 @@ export function RegisterPage(): React.JSX.Element {
                 ['tempmail', t('register.tempmail')],
                 ['ddg', 'DDG + Gmail'],
                 ['browser-ddg', isEn ? 'Browser (DDG)' : '浏览器 (DDG)'],
-                ['browser-tempmail', isEn ? 'Browser (TempMail)' : '浏览器 (TempMail)']
+                ['browser-tempmail', isEn ? 'Browser (TempMail)' : '浏览器 (TempMail)'],
+                [
+                  'browser-provided-email',
+                  isEn ? 'Browser (Email Provider)' : '浏览器 (邮箱提供商)'
+                ]
               ] as [RegMode, string][]
             ).map(([m, label]) => (
               <button
@@ -2055,6 +2131,47 @@ export function RegisterPage(): React.JSX.Element {
                 {isEn
                   ? 'DDG generates a @duck.com alias and forwards mail to your Gmail. Gmail IMAP polls for the OTP.'
                   : 'DDG 生成 @duck.com 别名并转发邮件到 Gmail，通过 Gmail IMAP 轮询获取验证码。'}
+              </p>
+            </div>
+          )}
+
+          {/* Provided Email Provider config */}
+          {mode === 'browser-provided-email' && (
+            <div className="p-4 bg-muted/30 rounded-lg border border-dashed space-y-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>{isEn ? 'FirstMail API Key' : 'FirstMail API 密钥'}</Label>
+                  <Input
+                    type="password"
+                    value={providedEmailApiKey}
+                    onChange={(e) => setProvidedEmailApiKey(e.target.value)}
+                    placeholder="X-API-KEY"
+                    disabled={isRunning || batchRunning}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>{isEn ? 'FirstMail API Base URL' : 'FirstMail API 地址'}</Label>
+                  <Input
+                    value={providedEmailApiBaseURL}
+                    onChange={(e) => setProvidedEmailApiBaseURL(e.target.value)}
+                    placeholder="https://firstmail.ltd/api/v1"
+                    disabled={isRunning || batchRunning}
+                  />
+                </div>
+              </div>
+              <Label>{isEn ? 'Email Provider Accounts' : '邮箱提供商账号'}</Label>
+              <textarea
+                value={providedEmailData}
+                onChange={(e) => setProvidedEmailData(e.target.value)}
+                placeholder={`kimnickles1931@alchiod.com:tmaxqeoxY!9528\njanniecavender1943@amaruanele.com:nrghrmzxY!3696`}
+                rows={8}
+                disabled={isRunning || batchRunning}
+                className="w-full px-3 py-2 bg-background border rounded-lg text-sm font-mono disabled:opacity-50 resize-y"
+              />
+              <p className="text-xs text-muted-foreground">
+                {isEn
+                  ? 'Format: email:password, one account per line. OTP is read through FirstMail /email/messages using X-API-KEY. Each successful run consumes the top line and removes it from this list.'
+                  : '格式：email:password，每行一个账号。验证码通过 FirstMail /email/messages 和 X-API-KEY 读取。每次成功注册会使用并从列表顶部移除一行。'}
               </p>
             </div>
           )}
@@ -2319,7 +2436,9 @@ export function RegisterPage(): React.JSX.Element {
                       !ddgGmailEmail.trim() ||
                       !ddgGmailAppPassword.trim())) ||
                   (mode === 'browser-tempmail' &&
-                    (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim()))
+                    (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim())) ||
+                  (mode === 'browser-provided-email' &&
+                    (!providedEmailData.trim() || !providedEmailApiKey.trim()))
                 }
               >
                 <Play className="h-4 w-4 mr-2" />
@@ -2550,7 +2669,9 @@ export function RegisterPage(): React.JSX.Element {
                       !ddgGmailEmail.trim() ||
                       !ddgGmailAppPassword.trim())) ||
                   (mode === 'browser-tempmail' &&
-                    (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim()))
+                    (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim())) ||
+                  (mode === 'browser-provided-email' &&
+                    (!providedEmailData.trim() || !providedEmailApiKey.trim()))
                 }
               >
                 {batchRunning ? (

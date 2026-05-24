@@ -313,6 +313,50 @@ function isSuspendedAccountError(error: unknown): boolean {
   )
 }
 
+function getAccountProfileArn(acc: any): string | undefined {
+  return acc.profileArn || acc.credentials?.profileArn || acc.credentials?.profile_arn
+}
+
+function getStoredAccountsForProxy(accountData: { accounts?: Record<string, any> } | undefined) {
+  if (!accountData?.accounts) return []
+
+  const seen = new Set<string>()
+  return Object.values(accountData.accounts)
+    .filter(
+      (acc: any) =>
+        acc.status === 'active' &&
+        acc.credentials?.accessToken &&
+        !String(acc.lastError || '')
+          .toLowerCase()
+          .includes('suspended') &&
+        !String(acc.lastError || '')
+          .toLowerCase()
+          .includes('locked')
+    )
+    .filter((acc: any) => {
+      // The UI can contain duplicate rows for the same email/refresh token. Counting those as
+      // separate pool accounts makes the pool look larger than the real quota capacity.
+      const key = acc.credentials?.refreshToken || acc.email || acc.id
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .map((acc: any) => ({
+      id: acc.id,
+      email: acc.email,
+      accessToken: acc.credentials.accessToken,
+      refreshToken: acc.credentials?.refreshToken,
+      profileArn: getAccountProfileArn(acc),
+      expiresAt: acc.credentials?.expiresAt,
+      machineId: acc.machineId,
+      clientId: acc.credentials?.clientId,
+      clientSecret: acc.credentials?.clientSecret,
+      region: acc.credentials?.region || 'us-east-1',
+      authMethod: acc.credentials?.authMethod,
+      provider: acc.credentials?.provider || acc.idp
+    }))
+}
+
 interface AutoReplacementConfig extends BrowserRegistrationConfig {
   enabled?: boolean
   generateProxyEachTime?: boolean
@@ -322,11 +366,35 @@ interface AutoReplacementConfig extends BrowserRegistrationConfig {
   scheduledIntervalMin?: number
   scheduledStartTime?: string
   scheduledEndTime?: string
-  scheduledMethod?: 'browser-ddg' | 'browser-tempmail' | 'browser-moemail'
+  scheduledMethod?:
+    | 'browser-ddg'
+    | 'browser-tempmail'
+    | 'browser-moemail'
+    | 'browser-provided-email'
 }
 
 let autoReplacementRunning = false
 let scheduledRegistrationTimer: ReturnType<typeof setTimeout> | null = null
+
+const COLAB_PROXY_TIMEOUT_MS = 60_000
+
+async function generateColabProxyWithTimeout(config: GenerateColabProxyConfig): Promise<string> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const controller = new AbortController()
+  try {
+    return await Promise.race([
+      generateColabProxy({ ...config, signal: controller.signal }),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort()
+          reject(new Error(`Proxy generation timeout (${COLAB_PROXY_TIMEOUT_MS / 1000} seconds)`))
+        }, COLAB_PROXY_TIMEOUT_MS)
+      })
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
 
 async function importRegisteredAccount(result: {
   email: string
@@ -401,10 +469,12 @@ async function runBrowserReplacementRegistration(
   const config: AutoReplacementConfig = {
     ...savedConfig,
     useDDG: isScheduled ? method === 'browser-ddg' : true,
-    useTempMailPlus: isScheduled ? method === 'browser-tempmail' : false
+    useTempMailPlus: isScheduled ? method === 'browser-tempmail' : false,
+    providedEmailData:
+      isScheduled && method === 'browser-provided-email' ? savedConfig.providedEmailData : undefined
   }
 
-  if (isScheduled && method === 'browser-moemail') {
+  if (isScheduled && (method === 'browser-moemail' || method === 'browser-provided-email')) {
     config.useDDG = false
     config.useTempMailPlus = false
   }
@@ -428,6 +498,18 @@ async function runBrowserReplacementRegistration(
     return
   }
 
+  if (
+    isScheduled &&
+    method === 'browser-provided-email' &&
+    (!config.providedEmailData || !config.providedEmailApiKey)
+  ) {
+    mainWindow?.webContents.send('registration-log', {
+      message:
+        '[AutoRegister] Browser (Email Provider) is selected but email accounts / FirstMail API Key are not configured.'
+    })
+    return
+  }
+
   if (isScheduled && method === 'browser-moemail' && !config.moEmailBaseURL) {
     mainWindow?.webContents.send('registration-log', {
       message:
@@ -440,14 +522,29 @@ async function runBrowserReplacementRegistration(
   try {
     const browserConfig: BrowserRegistrationConfig = { ...config, taskId: `replace-${Date.now()}` }
     if (config.generateProxyEachTime) {
+      mainWindow?.webContents.send('registration-log', {
+        message: '[AutoReplace] Generating new proxy from Colab...',
+        taskId: browserConfig.taskId
+      })
+
       try {
-        browserConfig.proxyUrl = await generateColabProxy({
+        browserConfig.proxyUrl = await generateColabProxyWithTimeout({
           cdpAddress: config.proxyCdpAddress || '127.0.0.1:9229',
-          formUrl: config.proxyFormUrl
+          formUrl: config.proxyFormUrl,
+          onLog: (message) =>
+            mainWindow?.webContents.send('registration-log', {
+              message: `[AutoReplace] ${message}`,
+              taskId: browserConfig.taskId
+            })
+        })
+        mainWindow?.webContents.send('registration-log', {
+          message: `[AutoReplace] Proxy generated successfully: ${browserConfig.proxyUrl}`,
+          taskId: browserConfig.taskId
         })
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
         mainWindow?.webContents.send('registration-log', {
-          message: `[AutoReplace] Proxy generation failed, continuing without proxy: ${error instanceof Error ? error.message : String(error)}`,
+          message: `[AutoReplace] Proxy generation failed: ${errorMsg}. Continuing without proxy...`,
           taskId: browserConfig.taskId
         })
         browserConfig.proxyUrl = undefined
@@ -701,33 +798,7 @@ function initProxyServer(): ProxyServer {
       await initStore()
       if (!store) return
       const accountData = store.get('accountData') as { accounts?: Record<string, any> } | undefined
-      if (!accountData?.accounts) return
-      const proxyAccounts = Object.values(accountData.accounts)
-        .filter(
-          (acc: any) =>
-            acc.status === 'active' &&
-            acc.credentials?.accessToken &&
-            !String(acc.lastError || '')
-              .toLowerCase()
-              .includes('suspended') &&
-            !String(acc.lastError || '')
-              .toLowerCase()
-              .includes('locked')
-        )
-        .map((acc: any) => ({
-          id: acc.id,
-          email: acc.email,
-          accessToken: acc.credentials.accessToken,
-          refreshToken: acc.credentials?.refreshToken,
-          profileArn: acc.profileArn,
-          expiresAt: acc.credentials?.expiresAt,
-          machineId: acc.machineId,
-          clientId: acc.credentials?.clientId,
-          clientSecret: acc.credentials?.clientSecret,
-          region: acc.credentials?.region || 'us-east-1',
-          authMethod: acc.credentials?.authMethod,
-          provider: acc.credentials?.provider || acc.idp
-        }))
+      const proxyAccounts = getStoredAccountsForProxy(accountData)
       if (proxyAccounts.length > 0 && proxyServer) {
         const pool = proxyServer.getAccountPool()
         proxyAccounts.forEach((acc) => pool.addAccount(acc))
@@ -1966,45 +2037,7 @@ function createWindow(): void {
           const accountData = store!.get('accountData') as
             | { accounts?: Record<string, any> }
             | undefined
-          if (!accountData?.accounts) return 0
-
-          const bindings = accountData.accountProxyBindings || {}
-          const proxyPool = accountData.proxyPool || {}
-          const buildProxyUrl = (accountId: string): string | undefined => {
-            const proxyId = bindings[accountId]
-            if (!proxyId) return undefined
-            const p = proxyPool[proxyId]
-            if (!p || !p.enabled || p.status === 'dead') return undefined
-            return p.url
-          }
-
-          const proxyAccounts = Object.values(accountData.accounts)
-            .filter(
-              (acc: any) =>
-                acc.status === 'active' &&
-                acc.credentials?.accessToken &&
-                !String(acc.lastError || '')
-                  .toLowerCase()
-                  .includes('suspended') &&
-                !String(acc.lastError || '')
-                  .toLowerCase()
-                  .includes('locked')
-            )
-            .map((acc: any) => ({
-              id: acc.id,
-              email: acc.email,
-              accessToken: acc.credentials.accessToken,
-              refreshToken: acc.credentials?.refreshToken,
-              profileArn: acc.profileArn,
-              expiresAt: acc.credentials?.expiresAt,
-              machineId: acc.machineId,
-              clientId: acc.credentials?.clientId,
-              clientSecret: acc.credentials?.clientSecret,
-              region: acc.credentials?.region || 'us-east-1',
-              authMethod: acc.credentials?.authMethod,
-              provider: acc.credentials?.provider || acc.idp,
-              proxyUrl: buildProxyUrl(acc.id)
-            }))
+          const proxyAccounts = getStoredAccountsForProxy(accountData)
           if (proxyAccounts.length > 0) {
             const pool = server.getAccountPool()
             pool.clear()
@@ -2345,10 +2378,20 @@ app.whenReady().then(async () => {
     'registration-generate-colab-proxy',
     async (_event, config: GenerateColabProxyConfig) => {
       try {
-        const proxyUrl = await generateColabProxy(config)
+        console.log('[Registration] Manual Colab proxy generation requested')
+        const proxyUrl = await generateColabProxyWithTimeout({
+          ...config,
+          onLog: (message) =>
+            mainWindow?.webContents.send('registration-log', {
+              message
+            })
+        })
+        console.log(`[Registration] Manual Colab proxy generated: ${proxyUrl}`)
         return { success: true, proxyUrl }
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : String(error) }
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        console.log(`[Registration] Manual Colab proxy generation failed: ${errorMsg}`)
+        return { success: false, error: errorMsg }
       }
     }
   )

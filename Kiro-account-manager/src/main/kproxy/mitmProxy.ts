@@ -288,7 +288,15 @@ export class MitmProxy {
           let modifiedBody = bodyBuffer
           if (contentType.includes('json') || contentType.includes('text')) {
             const body = bodyBuffer.toString('utf8')
-            const modifiedText = this.modifyBody(body)
+            // Parallel proxy requests can belong to different accounts. Do not rely only on
+            // the global K-Proxy deviceId here: it may be changed by another in-flight
+            // request between header parsing and body rewriting. Prefer the deviceId that is
+            // already present in this request's Kiro user-agent headers.
+            const requestDeviceId =
+              info.newDeviceId ||
+              this.extractDeviceIdFromHeaders(modifiedHeaders) ||
+              this.config.deviceId
+            const modifiedText = this.modifyBody(body, requestDeviceId)
             if (modifiedText !== body) {
               modifiedBody = Buffer.from(modifiedText, 'utf8')
               modifiedHeaders = modifiedHeaders.replace(
@@ -333,8 +341,7 @@ export class MitmProxy {
   /**
    * 替换请求体中的 Machine ID
    */
-  private modifyBody(body: string): string {
-    const targetDeviceId = this.config.deviceId
+  private modifyBody(body: string, targetDeviceId?: string): string {
     if (!targetDeviceId || !body) return body
     // 只在 body 中包含 64 位十六进制时才替换（避免误伤无关内容）
     if (!MACHINE_ID_REGEX.test(body)) return body
@@ -351,6 +358,11 @@ export class MitmProxy {
     })
     MACHINE_ID_REGEX.lastIndex = 0
     return result
+  }
+
+  private extractDeviceIdFromHeaders(headers: string): string | undefined {
+    const match = headers.match(KIRO_UA_REGEX)
+    return match?.[1]
   }
 
   /**

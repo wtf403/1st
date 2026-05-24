@@ -39,7 +39,7 @@ export interface AccountPoolConfig {
 const DEFAULT_CONFIG: AccountPoolConfig = {
   baseCooldownMs: 60000, // 60s 基础冷却
   maxBackoffMultiplier: 1440, // 最大 1440 倍 = 24h
-  quotaResetMs: 3600000, // 1h 配额重置
+  quotaResetMs: 3600000, // 1h 配额错误本地冷却；到期后自动 half-open 重试
   probabilisticRetryChance: 0.1 // 10% 概率重试
 }
 
@@ -275,9 +275,11 @@ export class AccountPool {
     if (account.quotaResetAt && account.quotaResetAt <= now) {
       return false
     }
-    // 有明确的耗尽标记
+    // 有明确的耗尽标记：只在本地冷却窗口内视为耗尽。
+    // 之前这里永久返回 true，导致一次 AmazonQ quota/throttle 错误后账号永远不回池，
+    // 直到手动重启/reset；最终日志显示 "All N accounts quota exhausted"。
     if (account.quotaExhaustedAt && account.quotaExhaustedAt > 0) {
-      return true
+      return now - account.quotaExhaustedAt < this.config.quotaResetMs
     }
     // 有配额数据且已用尽
     if (
@@ -369,11 +371,13 @@ export class AccountPool {
     // RECOVERABLE: 增加失败计数，断路器指数退避自动生效
     const errorCount = (account.errorCount || 0) + 1
     let quotaExhaustedAt = account.quotaExhaustedAt
+    let quotaResetAt = account.quotaResetAt
 
-    // 配额类错误额外标记耗尽
+    // 配额类错误额外标记耗尽，但必须带本地 reset 时间，避免永久踢出账号池。
     const isQuotaError = statusCode === 402 || statusCode === 429
     if (isQuotaError) {
       quotaExhaustedAt = now
+      quotaResetAt = now + this.config.quotaResetMs
     }
 
     // 计算当前退避时间用于日志
@@ -397,6 +401,7 @@ export class AccountPool {
       ...account,
       errorCount,
       quotaExhaustedAt,
+      quotaResetAt,
       lastUsed: now,
       isAvailable: account.suspended ? false : account.isAvailable
     })
@@ -493,7 +498,8 @@ export class AccountPool {
         isAvailable: true,
         errorCount: 0,
         cooldownUntil: undefined,
-        quotaExhaustedAt: undefined
+        quotaExhaustedAt: undefined,
+        quotaResetAt: undefined
       })
     }
     this.currentIndex = 0

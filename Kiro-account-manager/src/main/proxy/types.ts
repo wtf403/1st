@@ -519,40 +519,9 @@ export interface ProxyConfig {
   multiAccountGroupIds?: string[]
   // 模型映射规则
   modelMappings?: ModelMappingRule[]
-
-  // ============ 安全 / 限流 / 可观测（v1.8 新增） ============
-  /** 入站请求体最大字节数（默认 10MB）。超过返回 413 */
-  maxRequestBodyBytes?: number
-  /** 允许访问的客户端 IP 列表（CIDR 或单 IP）；空数组或未设 = 不限制 */
-  allowedIPs?: string[]
-  /** 拒绝访问的客户端 IP 列表（CIDR 或单 IP）；优先级高于 allowedIPs */
-  deniedIPs?: string[]
-  /** 当绑定 host 是 0.0.0.0/外网接口时，是否允许无 API Key 启动（默认 false 拒绝） */
-  allowExternalWithoutApiKey?: boolean
-  /** 按 API Key（或匿名时按 IP）的请求频率限制：每分钟最大请求数。0=不限制 */
-  rateLimitPerKeyPerMinute?: number
-  /** 客户端会话粘性：true 时同一 session hint 总路由到同一账号子集 */
-  sessionAffinityEnabled?: boolean
-  /** keep-alive 连接空闲超时（毫秒），默认 65s */
-  keepAliveTimeoutMs?: number
-  /** request headers 接收超时（毫秒），默认 60s */
-  headersTimeoutMs?: number
-  /** recentRequests 保留条数（默认 100，最多 10000） */
-  recentRequestsLimit?: number
-  /** 是否暴露 /metrics（Prometheus 文本格式） */
-  enableMetrics?: boolean
-  /**
-   * P2-21 API Key 与账号的精细绑定：apiKey id → 允许使用的账号 ID 数组（白名单）
-   * 未配置或空数组 = 该 API Key 可使用所有账号；
-   * 兼容旧名 apiKeyGroupBindings（按 group 绑定，需配合 group 同步）
-   */
-  apiKeyAccountBindings?: Record<string, string[]>
-  /** @deprecated 改用 apiKeyAccountBindings；保留以兼容老配置 */
-  apiKeyGroupBindings?: Record<string, string[]>
-  /** HTTP + HTTPS 双端口：启用 TLS 时，仍同时监听 HTTP 端口在 fallbackPort */
-  fallbackPort?: number
-  /** 启用审计日志（管理 API 操作、config 变更） */
-  enableAuditLog?: boolean
+  // 服务端工具自动继续配置
+  enableServerSideToolAutoContinue?: boolean
+  autoContinueRounds?: number
 }
 
 export interface TlsConfig {

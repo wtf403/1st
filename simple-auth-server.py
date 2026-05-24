@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 import hashlib
 import hmac
+import os
 import secrets
 import time
 from http import cookies
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
 LOGIN = "admin"
 PASSWORD = "ValueVaults"
 SECRET = "ValueVaults-simple-auth-secret-v1"
 COOKIE_NAME = "simple_auth_session"
+
+# Connection pool configuration
+MAX_THREADS = int(os.environ.get("MAX_THREADS", "100"))
+REQUEST_QUEUE_SIZE = int(os.environ.get("REQUEST_QUEUE_SIZE", "200"))
 
 
 def sign(value: str) -> str:
@@ -215,4 +220,17 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    HTTPServer(("127.0.0.1", 18080), Handler).serve_forever()
+    # Configure ThreadingHTTPServer with connection limits
+    server = ThreadingHTTPServer(("127.0.0.1", 18080), Handler)
+    server.daemon_threads = True  # Allow threads to exit when main thread exits
+    server.block_on_close = False  # Don't block on server shutdown
+    server.request_queue_size = REQUEST_QUEUE_SIZE  # Max pending connections
+
+    print(f"Starting ThreadingHTTPServer on http://127.0.0.1:18080", flush=True)
+    print(f"Configuration: MAX_THREADS={MAX_THREADS}, REQUEST_QUEUE_SIZE={REQUEST_QUEUE_SIZE}", flush=True)
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down server...", flush=True)
+        server.shutdown()

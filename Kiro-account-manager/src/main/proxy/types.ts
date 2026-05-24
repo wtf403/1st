@@ -517,6 +517,9 @@ export interface ProxyConfig {
   multiAccountGroupIds?: string[]
   // 模型映射规则
   modelMappings?: ModelMappingRule[]
+  // 服务端工具自动继续配置
+  enableServerSideToolAutoContinue?: boolean
+  autoContinueRounds?: number
 }
 
 export interface TlsConfig {

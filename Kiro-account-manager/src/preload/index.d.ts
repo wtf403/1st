@@ -864,6 +864,20 @@ interface KiroApi {
     logs: Array<{ time: string; path: string; status: number; tokens?: number }>
   }>
 
+  // 清除账号 suspended 状态
+  proxyClearAccountSuspended: (accountId: string) => Promise<{ success: boolean; error?: string }>
+
+  // 窗口控制
+  window: {
+    minimize: () => void
+    maximize: () => void
+    maximizeToggle: () => void
+    close: () => void
+    isMaximized: () => Promise<boolean>
+    onMaximizeChange: (callback: (isMaximized: boolean) => void) => () => void
+    getPlatform: () => Promise<NodeJS.Platform>
+  }
+
   // 监听反代请求事件
   onProxyRequest: (
     callback: (info: { path: string; method: string; accountId?: string }) => void

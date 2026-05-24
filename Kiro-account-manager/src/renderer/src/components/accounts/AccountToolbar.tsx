@@ -207,13 +207,15 @@ export function AccountToolbar({
         count: tabCounts.ungrouped
       }
     }
-    const g = groups.get(activeGroupTab)
-    if (g) {
-      return {
-        label: g.name,
-        color: g.color ? toRgba(g.color) : undefined,
-        icon: <FolderPlus className="h-4 w-4 mr-1.5" />,
-        count: tabCounts.byGroup.get(g.id) || 0
+    if (activeGroupTab) {
+      const g = groups.get(activeGroupTab)
+      if (g) {
+        return {
+          label: g.name,
+          color: g.color ? toRgba(g.color) : undefined,
+          icon: <FolderPlus className="h-4 w-4 mr-1.5" />,
+          count: tabCounts.byGroup.get(g.id) || 0
+        }
       }
     }
     // 兜底：activeGroupTab 是失效的 groupId（分组被删了）→ 回退到全部

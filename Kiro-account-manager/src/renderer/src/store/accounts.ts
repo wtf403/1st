@@ -88,6 +88,9 @@ interface AccountsState {
   // 选中的账号（用于批量操作）
   selectedIds: Set<string>
 
+  // 当前激活的分组标签页
+  activeGroupTab: string | null
+
   // 加载状态
   isLoading: boolean
   isSyncing: boolean
@@ -187,6 +190,9 @@ interface AccountsActions {
   deselectAll: () => void
   toggleSelection: (id: string) => void
   getSelectedAccounts: () => Account[]
+
+  // 分组标签页
+  setActiveGroupTab: (groupId: string | null) => void
 
   // 导入导出
   exportAccounts: (ids?: string[]) => AccountExportData
@@ -306,6 +312,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   filter: defaultFilter,
   sort: defaultSort,
   selectedIds: new Set(),
+  activeGroupTab: null,
   isLoading: false,
   isSyncing: false,
   autoRefreshEnabled: true,
@@ -810,6 +817,12 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     return Array.from(selectedIds)
       .map((id) => accounts.get(id))
       .filter((a): a is Account => a !== undefined)
+  },
+
+  // ==================== 分组标签页 ====================
+
+  setActiveGroupTab: (groupId) => {
+    set({ activeGroupTab: groupId })
   },
 
   // ==================== 导入导出 ====================

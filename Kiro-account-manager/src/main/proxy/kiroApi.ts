@@ -314,6 +314,14 @@ function isCodeWhispererModelId(modelId: string): boolean {
   return /^[A-Z0-9_]+$/.test(modelId) && modelId.includes('_')
 }
 
+function isKnownBadCodeWhispererModelId(modelId: string): boolean {
+  const normalized = modelId.toUpperCase()
+  // Observed to be rejected by GenerateAssistantResponse with INVALID_MODEL_ID.
+  // If ListAvailableModels cannot be fetched or does not include it, fall back to a
+  // known older CodeWhisperer ID instead of hammering the endpoint with the bad ID.
+  return normalized === 'CLAUDE_SONNET_4_20250514_V1_0'
+}
+
 function getModelCacheKey(account: ProxyAccount): string {
   return `${account.id}:${account.region || 'us-east-1'}:${resolveProfileArn(account)}`
 }
@@ -336,11 +344,19 @@ async function resolveCodeWhispererModelId(
   signal?: AbortSignal
 ): Promise<string> {
   const modelId = requestedModelId?.trim()
-  if (!modelId) return CODEWHISPERER_DEFAULT_MODEL_ID
-  if (isCodeWhispererModelId(modelId)) return modelId
   const models = await getCachedCodeWhispererModels(account, signal)
+  if (!modelId) return models[0]?.modelId || CODEWHISPERER_DEFAULT_MODEL_ID
+  if (isCodeWhispererModelId(modelId)) {
+    if (!isKnownBadCodeWhispererModelId(modelId)) return modelId
+    const replacement = models.find((model) => model.modelId !== modelId)?.modelId
+    if (replacement) {
+      console.warn(`[KiroAPI] CodeWhisperer model ${modelId} is known bad; using ${replacement}`)
+      return replacement
+    }
+  }
   return (
     models.find((model) => matchesRequestedModel(model, modelId))?.modelId ||
+    models[0]?.modelId ||
     CODEWHISPERER_DEFAULT_MODEL_ID
   )
 }
@@ -1349,10 +1365,17 @@ export async function callKiroApiStream(
         endpointSignal.cleanup()
       }
 
-      if (response.status === 429) {
-        console.log(`[KiroAPI] Endpoint ${endpoint.name} quota exhausted, trying next...`)
-        lastError = new Error(`Quota exhausted on ${endpoint.name}`)
-        continue
+      if (response.status === 402 || response.status === 429) {
+        throwIfAborted(signal)
+        const body = await response.text()
+        throwIfAborted(signal)
+        const message = `API error ${response.status}: ${body}`
+        console.log(`[KiroAPI] Endpoint ${endpoint.name} quota/throttle exhausted: ${message}`)
+        // Quota is account-scoped for the observed MONTHLY_REQUEST_COUNT failures.
+        // Do not try another endpoint on the same exhausted account; return to ProxyServer
+        // so it can mark the account as quota-exhausted and switch accounts immediately.
+        onError(new Error(message))
+        return
       }
 
       if (response.status === 401 || response.status === 403) {
@@ -1381,6 +1404,18 @@ export async function callKiroApiStream(
       }
       lastError = error instanceof Error ? error : new Error(describeError(error))
       console.error(`[KiroAPI] Endpoint ${endpoint.name} failed: ${describeError(error)}`)
+
+      // Request-fatal 400s (for example INVALID_MODEL_ID) will fail for every account
+      // and should not fall through to the next endpoint. Falling through produced the
+      // noisy pattern CodeWhisperer INVALID_MODEL_ID -> AmazonQ invalid bearer -> stream retry loop.
+      if (
+        lastError.message.includes('API error 400') &&
+        (lastError.message.includes('INVALID_MODEL_ID') ||
+          lastError.message.includes('CONTENT_LENGTH_EXCEEDS_THRESHOLD'))
+      ) {
+        onError(lastError)
+        return
+      }
 
       // AmazonQ can return 403 for tokens that are only valid on CodeWhisperer (and
       // vice-versa). Do not stop endpoint fallback on auth errors unless the user

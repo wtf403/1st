@@ -239,12 +239,15 @@ export class Registrar {
    * 静态资源不需要 TLS 指纹伪装，直接用 Node/undici fetch 即可。
    */
   private async fetchAppJS(url: string, init?: RequestInit): Promise<Response> {
-    const proxyUrl = (this.cfg.proxy && this.cfg.proxy.trim())
-      || process.env.HTTPS_PROXY || process.env.https_proxy
-      || process.env.HTTP_PROXY || process.env.http_proxy
-      || getSystemProxy() || undefined
-    const agent = safeCreateProxyAgent(proxyUrl)
-    if (agent) {
+    const proxyUrl =
+      process.env.HTTPS_PROXY ||
+      process.env.https_proxy ||
+      process.env.HTTP_PROXY ||
+      process.env.http_proxy ||
+      getSystemProxy() ||
+      undefined
+    if (proxyUrl) {
+      const agent = new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: false } })
       const resp = await undiciFetch(url, { ...(init as UndiciRequestInit), dispatcher: agent })
       return resp as unknown as Response
     }
@@ -1028,10 +1031,16 @@ export class Registrar {
       const accounts = parseOutlookLines(this.cfg.outlookData)
       const acc = accounts.find((a) => a.email === this.email)
       if (!acc) throw new Error('未找到对应 Outlook 账号')
-      return await waitForOTP(acc, this.outlookMailCount, 120, 5)
+      return await waitForOTP(
+        acc,
+        this.outlookMailCount,
+        120,
+        5,
+        () => this.abortController.signal.aborted
+      )
     }
     if (!this.emailSvc) throw new Error('邮箱服务未初始化')
-    return await this.emailSvc.waitForCode(120, 3)
+    return await this.emailSvc.waitForCode(120, 3, () => this.abortController.signal.aborted)
   }
 
   private async step11CreateIdentity(otp: string): Promise<void> {

@@ -18,6 +18,8 @@ export function classifyError(statusCode: number, reason?: string): ErrorType {
   if (statusCode === 429) return ErrorType.RECOVERABLE
   // 400: 根据原因细分
   if (statusCode === 400) {
+    // 请求本身问题，换账号只会制造重试风暴。
+    if (reason === 'INVALID_MODEL_ID') return ErrorType.FATAL
     // 上下文超限 → 所有账号都会失败
     if (reason === 'CONTENT_LENGTH_EXCEEDS_THRESHOLD') return ErrorType.FATAL
     return ErrorType.FATAL
@@ -125,10 +127,14 @@ export class AccountPool {
       return null
     }
 
-    // 单账号特殊处理：绕过断路器，但绝不返回已封禁/冻结的账号
+    // 单账号特殊处理：可以绕过普通断路器，但不能绕过永久/长期状态。
+    // 之前这里会在 402 MONTHLY_REQUEST_COUNT 后仍继续返回唯一账号，导致客户端不断重试同一个无配额账号。
     if (accountList.length === 1) {
       const account = accountList[0]
       if (excludeIds?.has(account.id) || account.suspended) return null
+      if (this.isQuotaExhausted(account, Date.now())) return null
+      if (account.expiresAt && account.expiresAt < Date.now()) return null
+      if (account.isAvailable === false) return null
       return account
     }
 
@@ -374,6 +380,8 @@ export class AccountPool {
     let quotaResetAt = account.quotaResetAt
 
     // 配额类错误额外标记耗尽，但必须带本地 reset 时间，避免永久踢出账号池。
+    // 402 表示账号月度/计费配额耗尽：禁用到 quotaResetAt，不删除账号。
+    // 429 通常是限流，也使用较短本地冷却，避免立即重复打同一个账号。
     const isQuotaError = statusCode === 402 || statusCode === 429
     if (isQuotaError) {
       quotaExhaustedAt = now
@@ -403,7 +411,7 @@ export class AccountPool {
       quotaExhaustedAt,
       quotaResetAt,
       lastUsed: now,
-      isAvailable: account.suspended ? false : account.isAvailable
+      isAvailable: account.suspended ? false : isQuotaError ? false : account.isAvailable
     })
   }
 

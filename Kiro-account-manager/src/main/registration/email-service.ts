@@ -41,7 +41,7 @@ export interface TempEmailService {
   create(): Promise<string>
   /** Optional hook called immediately before the registration page requests an OTP. */
   beforeSendCode?(): Promise<void>
-  waitForCode(timeoutSec: number, intervalSec: number): Promise<string>
+  waitForCode(timeoutSec: number, intervalSec: number, abortCheck?: () => boolean): Promise<string>
   getAddress(): string
 }
 
@@ -238,16 +238,22 @@ export class ProvidedEmailService implements TempEmailService {
     }
   }
 
-  async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
+  async waitForCode(
+    timeoutSec: number,
+    intervalSec: number,
+    abortCheck?: () => boolean
+  ): Promise<string> {
     if (!this.address) throw new Error('邮箱地址为空')
-    if (this.apiKey) return this.waitForCodeViaFirstMailAPI(timeoutSec, intervalSec)
+    if (this.apiKey) return this.waitForCodeViaFirstMailAPI(timeoutSec, intervalSec, abortCheck)
 
     const maxRetries = Math.floor(timeoutSec / intervalSec)
     const checkedUids = new Set<string>()
     const minUid = String((Number.parseInt(this.baselineAwsUid || '0', 10) || 0) + 1)
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       await sleep(intervalSec * 1000)
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       let client: GenericIMAPClient | null = null
       try {
         client = await this.connectClient()
@@ -282,14 +288,17 @@ export class ProvidedEmailService implements TempEmailService {
 
   private async waitForCodeViaFirstMailAPI(
     timeoutSec: number,
-    intervalSec: number
+    intervalSec: number,
+    abortCheck?: () => boolean
   ): Promise<string> {
     const maxRetries = Math.floor(timeoutSec / intervalSec)
     const checkedIds = new Set<string>()
     const baseline = this.baselineTime || Date.now()
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       await sleep(intervalSec * 1000)
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       try {
         const messages = await this.fetchFirstMailMessages()
         if (attempt === 1 || attempt % 5 === 0) {
@@ -451,12 +460,18 @@ export class MoEmailService implements TempEmailService {
     return addr
   }
 
-  async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
+  async waitForCode(
+    timeoutSec: number,
+    intervalSec: number,
+    abortCheck?: () => boolean
+  ): Promise<string> {
     if (!this.address) throw new Error('邮箱地址为空')
 
     const maxRetries = Math.floor(timeoutSec / intervalSec)
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       await sleep(intervalSec * 1000)
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       try {
         const code = await this.fetchCode()
         if (code) return code
@@ -666,13 +681,19 @@ export class TempMailPlusService implements TempEmailService {
     return this.address
   }
 
-  async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
+  async waitForCode(
+    timeoutSec: number,
+    intervalSec: number,
+    abortCheck?: () => boolean
+  ): Promise<string> {
     if (!this.address) throw new Error('邮箱地址为空')
     const maxRetries = Math.floor(timeoutSec / intervalSec)
     const checkedIds = new Set<number>()
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       await sleep(intervalSec * 1000)
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       try {
         const mails = await this.fetchMailList()
         if (attempt === 1 || attempt % 5 === 0) {
@@ -1006,13 +1027,15 @@ export async function waitForOTP(
   acc: OutlookAccount,
   beforeCount: number,
   timeout: number,
-  interval: number
+  interval: number,
+  abortCheck?: () => boolean
 ): Promise<string> {
   console.log(`[Outlook IMAP] 等待验证码, 邮箱=${acc.email}, 发送前邮件数=${beforeCount}`)
   let accessToken = await refreshOutlookToken(acc)
   const maxRetries = Math.floor(timeout / interval)
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    if (abortCheck?.()) throw new Error('Registration cancelled')
     let client: IMAPClient | null = null
     try {
       client = new IMAPClient()
@@ -1024,6 +1047,7 @@ export async function waitForOTP(
         if (attempt % 5 === 0)
           console.log(`[Outlook IMAP] [${attempt}/${maxRetries}] 暂无新邮件 (当前${total}封)...`)
         await sleep(interval * 1000)
+        if (abortCheck?.()) throw new Error('Registration cancelled')
         continue
       }
 
@@ -1132,11 +1156,15 @@ export class DuckDuckGoEmailService implements TempEmailService {
     }
   }
 
-  async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
+  async waitForCode(
+    timeoutSec: number,
+    intervalSec: number,
+    abortCheck?: () => boolean
+  ): Promise<string> {
     if (!this.address) throw new Error('Address not created yet')
     // DDG forwards to Gmail — poll Gmail IMAP for the forwarded mail
     const service = new GmailIMAPService(this.gmailAccount, this.address, this.baselineAwsUid)
-    return service.waitForCode(timeoutSec, intervalSec)
+    return service.waitForCode(timeoutSec, intervalSec, abortCheck)
   }
 }
 
@@ -1153,7 +1181,11 @@ class GmailIMAPService {
     this.baselineAwsUid = baselineAwsUid
   }
 
-  async waitForCode(timeoutSec: number, intervalSec: number): Promise<string> {
+  async waitForCode(
+    timeoutSec: number,
+    intervalSec: number,
+    abortCheck?: () => boolean
+  ): Promise<string> {
     const maxRetries = Math.floor(timeoutSec / intervalSec)
     const checkedUids = new Set<string>()
 
@@ -1161,7 +1193,9 @@ class GmailIMAPService {
     console.log(`[Gmail IMAP] Waiting for AWS OTP after UID ${baselineUidNum}`)
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       await sleep(intervalSec * 1000)
+      if (abortCheck?.()) throw new Error('Registration cancelled')
       let client: GmailIMAPClient | null = null
       try {
         client = new GmailIMAPClient()

@@ -753,11 +753,11 @@ function initProxyServer(): ProxyServer {
           | undefined
         const storedAccount = accountData?.accounts?.[account.id]
         if (accountData?.accounts && storedAccount) {
-          accountData.accounts[account.id] = {
-            ...storedAccount,
-            status: 'error',
-            lastError: 'Account suspended or locked'
-          }
+          // Suspended/locked accounts are not recoverable by quota reset; remove them from
+          // persistent storage so they cannot be re-synced into the proxy pool on restart.
+          // Do not apply this to quota-exceeded accounts: those stay stored and disabled
+          // only inside the pool until their reset window.
+          delete accountData.accounts[account.id]
           store?.set('accountData', accountData)
           lastSavedData = accountData
         }

@@ -1117,7 +1117,7 @@ export class BrowserRegistrar {
             }
           }
 
-          const otp = await this.emailSvc.waitForCode(120, 3)
+          const otp = await this.emailSvc.waitForCode(120, 3, () => this.aborted)
           this.log(`[Browser] Got OTP (attempt ${attempt}): ${otp}`)
           this.checkAborted()
 

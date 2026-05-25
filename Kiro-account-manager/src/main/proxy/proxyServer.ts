@@ -1526,20 +1526,13 @@ export class ProxyServer {
         }
 
         // 402/429: 额度耗尽/限流，立即切换账号继续请求（不要当作 suspended）
-        if (
-          errMsg.includes('402') ||
-          errMsg.includes('429') ||
-          errMsg.includes('quota') ||
-          errMsg.includes('ThrottlingException') ||
-          errMsg.includes('reached the limit') ||
-          errMsg.includes('ServiceQuotaExceededException') ||
-          errMsg.includes('limit exceeded') ||
-          errMsg.includes('rate limit')
-        ) {
+        if (this.isQuotaError(errMsg)) {
           const statusCode =
-            errMsg.includes('402') || errMsg.includes('reached the limit') ? 402 : 429
+            errMsg.includes('402') || errMsg.toLowerCase().includes('monthly_request_count')
+              ? 402
+              : 429
           console.log(
-            `[ProxyServer] Quota/throttle error (${statusCode}) for ${currentAccount.email || currentAccount.id}, switching account`
+            `[ProxyServer] Quota/throttle error (${statusCode}) for ${currentAccount.email || currentAccount.id}, disabling account until reset and switching account`
           )
           this.accountPool.recordError(currentAccount.id, ErrorType.RECOVERABLE, statusCode)
           triedAccounts.add(currentAccount.id)
@@ -3489,19 +3482,33 @@ export class ProxyServer {
           if (isSuspendedError) {
             const suspendedAccount = this.accountPool.markSuspended(account.id)
             if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
+          } else if (this.isQuotaError(error.message)) {
+            this.markQuotaError(account.id, error.message)
           } else {
-            const errStatusCode = error.message.match(/(\d{3})/)?.[1]
+            const errStatusCode = this.getErrorStatusCode(error)
             this.accountPool.recordError(
               account.id,
-              errStatusCode ? classifyError(parseInt(errStatusCode)) : ErrorType.RECOVERABLE,
-              errStatusCode ? parseInt(errStatusCode) : undefined
+              errStatusCode ? classifyError(errStatusCode) : ErrorType.RECOVERABLE,
+              errStatusCode
             )
           }
 
           // The SSE headers/initial role chunk may already be sent, but if no model
           // content/tool call has been emitted yet we can continue the same stream with
-          // another account instead of surfacing the suspension error to the client.
-          if (collectedContent.length === 0 && pendingToolCalls.size === 0) {
+          // another account instead of surfacing account-specific errors to the client.
+          // Do not retry request-fatal errors like INVALID_MODEL_ID: every account will
+          // fail and clients may retry aggressively, creating a tight loop.
+          const shouldFailoverAccount =
+            isSuspendedError ||
+            this.isQuotaError(error.message) ||
+            error.message.includes('401') ||
+            error.message.includes('403') ||
+            error.message.includes('Auth')
+          if (
+            shouldFailoverAccount &&
+            collectedContent.length === 0 &&
+            pendingToolCalls.size === 0
+          ) {
             triedAccounts.add(account.id)
             const nextAccount = this.accountPool.getNextAccount(triedAccounts)
             if (nextAccount && nextAccount.id !== account.id) {
@@ -4187,22 +4194,34 @@ export class ProxyServer {
             return
           }
           console.error('[ProxyServer] Stream error:', error)
-          const errStatusCode2 = error.message.match(/(\d{3})/)?.[1]
+          const errStatusCode2 = this.getErrorStatusCode(error)
           const isSuspendedError = this.isSuspendedError(error.message)
 
           if (isSuspendedError) {
             const suspendedAccount = this.accountPool.markSuspended(account.id)
             if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
-          }
-          if (!isSuspendedError)
+          } else if (this.isQuotaError(error.message)) {
+            this.markQuotaError(account.id, error.message)
+          } else {
             this.accountPool.recordError(
               account.id,
-              errStatusCode2 ? classifyError(parseInt(errStatusCode2)) : ErrorType.RECOVERABLE,
-              errStatusCode2 ? parseInt(errStatusCode2) : undefined
+              errStatusCode2 ? classifyError(errStatusCode2) : ErrorType.RECOVERABLE,
+              errStatusCode2
             )
+          }
 
-          triedAccounts.add(account.id)
-          const nextAccount = this.accountPool.getNextAccount(triedAccounts)
+          const shouldFailoverAccount =
+            isSuspendedError ||
+            this.isQuotaError(error.message) ||
+            error.message.includes('401') ||
+            error.message.includes('403') ||
+            error.message.includes('Auth')
+          if (shouldFailoverAccount) {
+            triedAccounts.add(account.id)
+          }
+          const nextAccount = shouldFailoverAccount
+            ? this.accountPool.getNextAccount(triedAccounts)
+            : null
           if (nextAccount && nextAccount.id !== account.id) {
             const nextPayload = {
               ...kiroPayload,
@@ -4268,12 +4287,23 @@ export class ProxyServer {
         this.config.preferredEndpoint
       ).catch(async (error) => {
         if (!this.isAbortError(error, signal) && !this.isResponseClosed(res)) {
-          if (this.isSuspendedError(error.message)) {
+          const isSuspendedError = this.isSuspendedError(error.message)
+          if (isSuspendedError) {
             const suspendedAccount = this.accountPool.markSuspended(account.id)
             if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
+          } else if (this.isQuotaError(error.message)) {
+            this.markQuotaError(account.id, error.message)
           }
-          triedAccounts.add(account.id)
-          const nextAccount = this.accountPool.getNextAccount(triedAccounts)
+          const shouldFailoverAccount =
+            isSuspendedError ||
+            this.isQuotaError(error.message) ||
+            error.message.includes('401') ||
+            error.message.includes('403') ||
+            error.message.includes('Auth')
+          if (shouldFailoverAccount) triedAccounts.add(account.id)
+          const nextAccount = shouldFailoverAccount
+            ? this.accountPool.getNextAccount(triedAccounts)
+            : null
           if (nextAccount && nextAccount.id !== account.id) {
             const nextPayload = {
               ...kiroPayload,
@@ -4334,6 +4364,35 @@ export class ProxyServer {
     )
   }
 
+  private getErrorStatusCode(error: Error): number | undefined {
+    const message = error.message || ''
+    const apiMatch = message.match(/(?:API error|Auth error)\s+(\d{3})/i)
+    if (apiMatch) return parseInt(apiMatch[1], 10)
+    const anyMatch = message.match(/\b(\d{3})\b/)
+    return anyMatch ? parseInt(anyMatch[1], 10) : undefined
+  }
+
+  private isQuotaError(message: string): boolean {
+    const lower = message.toLowerCase()
+    return (
+      lower.includes('api error 402') ||
+      lower.includes('api error 429') ||
+      lower.includes('monthly_request_count') ||
+      lower.includes('you have reached the limit') ||
+      lower.includes('quota') ||
+      lower.includes('throttlingexception') ||
+      lower.includes('servicequotaexceededexception') ||
+      lower.includes('limit exceeded') ||
+      lower.includes('rate limit')
+    )
+  }
+
+  private markQuotaError(accountId: string, message: string): void {
+    const statusCode =
+      message.includes('402') || message.toLowerCase().includes('monthly_request_count') ? 402 : 429
+    this.accountPool.recordError(accountId, ErrorType.RECOVERABLE, statusCode)
+  }
+
   // 处理 API 错误
   private handleApiError(
     res: http.ServerResponse,
@@ -4346,21 +4405,22 @@ export class ProxyServer {
   ): void {
     if (this.isAbortError(error, signal) || this.isResponseClosed(res)) return
     this.recordRequestFailed()
-    const errCode = error.message.match(/(\d{3})/)?.[1]
-    const parsedCode = errCode ? parseInt(errCode) : 500
+    const parsedCode = this.getErrorStatusCode(error) || 500
     const errorType = classifyError(parsedCode)
     const isAuthError =
       error.message.includes('401') ||
       error.message.includes('403') ||
       error.message.includes('Auth')
 
-    // 检测账号封禁
+    // 检测账号封禁；封禁账号从池中移除。配额耗尽账号只禁用到重置时间，不删除。
     if (isAuthError && this.isSuspendedError(error.message)) {
       const suspendedAccount = this.accountPool.markSuspended(account.id)
       if (suspendedAccount) this.events.onAccountUpdate?.(suspendedAccount)
+    } else if (this.isQuotaError(error.message)) {
+      this.markQuotaError(account.id, error.message)
+    } else {
+      this.accountPool.recordError(account.id, errorType, parsedCode)
     }
-
-    this.accountPool.recordError(account.id, errorType, parsedCode)
 
     let statusCode = parsedCode
     if (isAuthError) statusCode = 401

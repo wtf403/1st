@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit, type Dispatcher } from 'undici'
 import type {
   KiroPayload,
+  KiroCurrentMessage,
   KiroUserInputMessage,
   KiroHistoryMessage,
   KiroToolWrapper,
@@ -226,13 +227,15 @@ REMEMBER: When in doubt, write LESS per operation. Multiple small operations > o
 const THINKING_MODE_PROMPT = `<thinking_mode>enabled</thinking_mode>
 <max_thinking_length>200000</max_thinking_length>`
 
-const CODEWHISPERER_DEFAULT_MODEL_ID = 'CLAUDE_SONNET_4_20250514_V1_0'
+const CODEWHISPERER_DEFAULT_MODEL_ID = 'claude-sonnet-4.5'
 const CODEWHISPERER_MODEL_CACHE_TTL = 5 * 60 * 1000
 
 const codeWhispererModelCache = new Map<string, { models: KiroModel[]; timestamp: number }>()
 
 // 模型 ID 映射
 const MODEL_ID_MAP: Record<string, string> = {
+  // Known-bad CodeWhisperer/internal IDs observed to return INVALID_MODEL_ID
+  claude_sonnet_4_20250514_v1_0: 'claude-sonnet-4.5',
   // Claude 4.5 系列
   'claude-sonnet-4-5': 'claude-sonnet-4.5',
   'claude-sonnet-4.5': 'claude-sonnet-4.5',
@@ -259,20 +262,267 @@ const MODEL_ID_MAP: Record<string, string> = {
 export function mapModelId(model: string): string {
   const modelId = model.trim()
   if (!modelId) return MODEL_ID_MAP.default
-  if (isCodeWhispererModelId(modelId)) return modelId
   const lower = modelId.toLowerCase()
-  // 1) 显式 alias 映射优先
+  // 1) Explicit aliases first, including aliases for known-bad internal IDs.
+  //    Some clients persist values from /v1/models, so never pass a known-bad ID through.
   if (MODEL_ID_MAP[lower]) return MODEL_ID_MAP[lower]
-  // 2) 看似 Kiro 支持的 Claude 模型格式 (claude-{sonnet|haiku|opus}-{ver})，原样透传
-  //    用于向前兼容尚未加入 MODEL_ID_MAP 的新发布模型
+  if (isCodeWhispererModelId(modelId)) {
+    if (isKnownBadCodeWhispererModelId(modelId)) {
+      console.warn(
+        `[Kiro API] Known-bad model "${modelId}" → fallback to "${MODEL_ID_MAP.default}"`
+      )
+      return MODEL_ID_MAP.default
+    }
+    return modelId
+  }
+  // 2) Kiro-supported Claude model aliases pass through for forward compatibility.
   if (/^claude-(sonnet|haiku|opus)-/.test(lower)) return modelId
-  // 3) 完全未知的 model（用户拼错/不存在），兜底到 default 避免直接 400
+  // 3) Unknown models fallback to a known safe alias instead of triggering INVALID_MODEL_ID.
   console.warn(`[Kiro API] Unknown model "${modelId}" → fallback to "${MODEL_ID_MAP.default}"`)
   return MODEL_ID_MAP.default
 }
 
 function clonePayload(payload: KiroPayload): KiroPayload {
   return JSON.parse(JSON.stringify(payload)) as KiroPayload
+}
+
+function getPayloadSize(payload: KiroPayload): number {
+  return Buffer.byteLength(JSON.stringify(payload), 'utf8')
+}
+
+function appendProxyNote(message: KiroUserInputMessage, note: string): void {
+  message.content = message.content?.trim() ? `${message.content}\n\n${note}` : note
+}
+
+function stripMessageAttachments(
+  message: KiroUserInputMessage,
+  scope: 'history' | 'current'
+): number {
+  const imageCount = message.images?.length ?? 0
+  const documentCount = message.documents?.length ?? 0
+  if (imageCount === 0 && documentCount === 0) return 0
+  const approxBytes =
+    (message.images ?? []).reduce((sum, image) => sum + (image.source?.bytes?.length ?? 0), 0) +
+    (message.documents ?? []).reduce(
+      (sum, document) => sum + (document.source?.bytes?.length ?? 0),
+      0
+    )
+  delete message.images
+  delete message.documents
+  appendProxyNote(
+    message,
+    `[Proxy compacted ${scope} attachments: removed ${imageCount} image(s) and ${documentCount} document(s), approximately ${approxBytes} base64 chars, to keep the request under Kiro's payload limit.]`
+  )
+  return imageCount + documentCount
+}
+
+function truncateToolResults(
+  payload: KiroPayload,
+  limitBytes: number
+): { count: number; size: number } {
+  const TOOL_RESULT_TRUNCATE_LENGTH = 4000
+  let size = getPayloadSize(payload)
+  let count = 0
+  const messages = [
+    ...(payload.conversationState.history ?? []),
+    payload.conversationState.currentMessage
+  ]
+  for (const message of messages) {
+    if (size <= limitBytes) break
+    const userToolResults = message.userInputMessage?.userInputMessageContext?.toolResults
+    if (!userToolResults) continue
+    for (const toolResult of userToolResults) {
+      if (size <= limitBytes) break
+      for (const contentItem of toolResult.content ?? []) {
+        if (size <= limitBytes) break
+        if (contentItem.text && contentItem.text.length > TOOL_RESULT_TRUNCATE_LENGTH) {
+          const originalLen = contentItem.text.length
+          contentItem.text = `${contentItem.text.slice(0, TOOL_RESULT_TRUNCATE_LENGTH)}\n\n[Truncated by proxy: original ${originalLen} chars]`
+          count++
+          size = getPayloadSize(payload)
+        }
+      }
+    }
+  }
+  return { count, size }
+}
+
+function compactLargeContextFields(
+  payload: KiroPayload,
+  limitBytes: number
+): { count: number; size: number } {
+  let size = getPayloadSize(payload)
+  let count = 0
+  const fields: Array<keyof KiroRequestContext> = [
+    'additionalContext',
+    'editorState',
+    'shellState',
+    'gitState',
+    'envState'
+  ]
+  const messages = [
+    ...(payload.conversationState.history ?? []),
+    payload.conversationState.currentMessage
+  ]
+  for (const message of messages) {
+    if (size <= limitBytes) break
+    const context = message.userInputMessage?.userInputMessageContext
+    if (!context) continue
+    for (const field of fields) {
+      if (size <= limitBytes) break
+      const value = context[field]
+      if (value === undefined) continue
+      const valueSize = JSON.stringify(value).length
+      if (valueSize < 64 * 1024) continue
+      context[field] = `[Proxy compacted ${field}: original serialized size ${valueSize} chars]`
+      count++
+      size = getPayloadSize(payload)
+    }
+  }
+  return { count, size }
+}
+
+function compactHistoryMessages(
+  payload: KiroPayload,
+  limitBytes: number
+): { removed: number; size: number } {
+  let history = payload.conversationState.history ?? []
+  let size = getPayloadSize(payload)
+  let removed = 0
+  if (history.length === 0 || size <= limitBytes) return { removed, size }
+
+  const preservedPrefix: KiroHistoryMessage[] = []
+  // Preserve the injected system instruction pair when present.
+  if (
+    history[0]?.userInputMessage?.content?.includes('[Context: Current time is') &&
+    history[1]?.assistantResponseMessage
+  ) {
+    preservedPrefix.push(history[0], history[1])
+    history = history.slice(2)
+  }
+
+  const removedSnippets: string[] = []
+  while (history.length > 2 && size > limitBytes) {
+    const removedMessage = history.shift()
+    removed++
+    const text =
+      removedMessage?.userInputMessage?.content ||
+      removedMessage?.assistantResponseMessage?.content ||
+      ''
+    if (text.trim() && removedSnippets.length < 6) {
+      removedSnippets.push(text.trim().replace(/\s+/g, ' ').slice(0, 180))
+    }
+    payload.conversationState.history = [...preservedPrefix, ...history]
+    size = getPayloadSize(payload)
+  }
+
+  if (removed > 0) {
+    const summaryText = [
+      `[Proxy auto-compact summary: ${removed} older message(s) were omitted because the serialized request exceeded Kiro's payload limit.]`,
+      removedSnippets.length > 0 ? `Retained snippets: ${removedSnippets.join(' | ')}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n')
+    const compactPair: KiroHistoryMessage[] = [
+      { userInputMessage: { content: summaryText, origin: 'AI_EDITOR' } },
+      { assistantResponseMessage: { content: 'I understand the compacted prior context.' } }
+    ]
+    payload.conversationState.history = [...preservedPrefix, ...compactPair, ...history]
+    size = getPayloadSize(payload)
+    while (
+      payload.conversationState.history.length > preservedPrefix.length + 2 &&
+      size > limitBytes
+    ) {
+      payload.conversationState.history.splice(preservedPrefix.length + 2, 1)
+      removed++
+      size = getPayloadSize(payload)
+    }
+  }
+
+  if (payload.conversationState.history?.length === 0) delete payload.conversationState.history
+  return { removed, size }
+}
+
+function enforcePayloadSizeLimit(payload: KiroPayload, limitBytes: number): number {
+  let size = getPayloadSize(payload)
+  let truncatedToolResults = 0
+  let strippedAttachments = 0
+  let compactedContextFields = 0
+  let compactedHistoryMessages = 0
+
+  if (size > limitBytes) {
+    const result = truncateToolResults(payload, limitBytes)
+    truncatedToolResults += result.count
+    size = result.size
+  }
+
+  if (size > limitBytes && payload.conversationState.history) {
+    for (const message of payload.conversationState.history) {
+      if (size <= limitBytes) break
+      if (!message.userInputMessage) continue
+      strippedAttachments += stripMessageAttachments(message.userInputMessage, 'history')
+      size = getPayloadSize(payload)
+    }
+  }
+
+  if (size > limitBytes) {
+    const result = compactLargeContextFields(payload, limitBytes)
+    compactedContextFields += result.count
+    size = result.size
+  }
+
+  if (size > limitBytes) {
+    const result = compactHistoryMessages(payload, limitBytes)
+    compactedHistoryMessages += result.removed
+    size = result.size
+  }
+
+  // Last resort: screenshots/files on the current turn are usually the largest part of
+  // chrome-devtools requests. Remove them instead of forwarding a request Kiro will reject
+  // with CONTENT_LENGTH_EXCEEDS_THRESHOLD.
+  if (size > limitBytes) {
+    strippedAttachments += stripMessageAttachments(
+      payload.conversationState.currentMessage.userInputMessage,
+      'current'
+    )
+    size = getPayloadSize(payload)
+  }
+
+  if (size > limitBytes) {
+    const current = payload.conversationState.currentMessage.userInputMessage
+    const maxCurrentContent = 24_000
+    if (current.content.length > maxCurrentContent) {
+      const originalLen = current.content.length
+      current.content = `${current.content.slice(0, maxCurrentContent)}\n\n[Truncated by proxy: current message was ${originalLen} chars]`
+      size = getPayloadSize(payload)
+    }
+  }
+
+  if (
+    truncatedToolResults > 0 ||
+    strippedAttachments > 0 ||
+    compactedContextFields > 0 ||
+    compactedHistoryMessages > 0
+  ) {
+    const allMessages = sanitizeConversation([
+      ...(payload.conversationState.history ?? []),
+      payload.conversationState.currentMessage
+    ])
+    payload.conversationState.history = allMessages.slice(0, -1)
+    payload.conversationState.currentMessage = allMessages.at(-1) as KiroCurrentMessage
+    if (payload.conversationState.history.length === 0) delete payload.conversationState.history
+    size = getPayloadSize(payload)
+    console.log('[KiroPayload] Auto-compacted oversized payload:', {
+      truncatedToolResults,
+      strippedAttachments,
+      compactedContextFields,
+      compactedHistoryMessages,
+      finalSize: size,
+      limitBytes
+    })
+  }
+
+  return size
 }
 
 function normalizeModelKey(value: string): string {
@@ -1094,38 +1344,10 @@ export function buildKiroPayload(
     payload.additionalModelRequestFields = additionalModelRequestFields
   }
 
-  // 工具结果裁剪：payload 超过限制时，从最旧的历史 toolResult 开始截断内容
-  // 用户可在高级设置中调整限制值（默认 1536KB = 1.5MB）
+  // Payload guard: Kiro's upstream rejects large serialized requests with
+  // CONTENT_LENGTH_EXCEEDS_THRESHOLD. Apply compact-style trimming by default.
   const PAYLOAD_SIZE_LIMIT = (payloadSizeLimitKB || 1536) * 1024
-  const TOOL_RESULT_TRUNCATE_LENGTH = 4000
-  let initialPayloadSize = JSON.stringify(payload).length
-  if (initialPayloadSize > PAYLOAD_SIZE_LIMIT && payload.conversationState.history) {
-    const historyMessages = payload.conversationState.history
-    let truncatedCount = 0
-    for (const message of historyMessages) {
-      if (initialPayloadSize <= PAYLOAD_SIZE_LIMIT) break
-      const userToolResults = message.userInputMessage?.userInputMessageContext?.toolResults
-      if (!userToolResults) continue
-      for (const toolResult of userToolResults) {
-        if (initialPayloadSize <= PAYLOAD_SIZE_LIMIT) break
-        if (!toolResult.content) continue
-        for (const contentItem of toolResult.content) {
-          if (initialPayloadSize <= PAYLOAD_SIZE_LIMIT) break
-          if (contentItem.text && contentItem.text.length > TOOL_RESULT_TRUNCATE_LENGTH) {
-            const originalLen = contentItem.text.length
-            contentItem.text = `${contentItem.text.slice(0, TOOL_RESULT_TRUNCATE_LENGTH)}\n\n[Truncated by proxy: original ${originalLen} chars]`
-            truncatedCount++
-            initialPayloadSize = JSON.stringify(payload).length
-          }
-        }
-      }
-    }
-    if (truncatedCount > 0) {
-      console.log(
-        `[KiroPayload] Truncated ${truncatedCount} large tool results to fit payload size limit (final size: ${initialPayloadSize} bytes)`
-      )
-    }
-  }
+  const initialPayloadSize = enforcePayloadSizeLimit(payload, PAYLOAD_SIZE_LIMIT)
 
   // 调试日志
   console.log(`[KiroPayload] Built payload (native history mode):`, {

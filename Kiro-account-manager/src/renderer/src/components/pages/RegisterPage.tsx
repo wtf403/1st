@@ -1384,31 +1384,52 @@ export function RegisterPage(): React.JSX.Element {
     generateProxyEachTime
   ])
 
+  const generateSharedColabProxy = useCallback(
+    async (scope: 'single' | 'batch'): Promise<string | undefined> => {
+      addLog(
+        scope === 'batch'
+          ? isEn
+            ? 'Generating one shared proxy before launching concurrent browser registrations...'
+            : '正在启动并发浏览器注册前生成一个共享代理...'
+          : isEn
+            ? 'Generating new proxy from Colab...'
+            : '正在从 Colab 生成新代理...'
+      )
+      const proxyRes = await window.api.registrationGenerateColabProxy({
+        cdpAddress: proxyCdpAddress.trim() || undefined,
+        formUrl: proxyFormUrl.trim() || undefined
+      })
+      if (!proxyRes.success || !proxyRes.proxyUrl) {
+        addLog(
+          scope === 'batch'
+            ? `${isEn ? 'Shared proxy generation failed; batch will continue without proxy' : '共享代理生成失败，批量将不使用代理继续'}: ${proxyRes.error || 'Proxy generation failed'}`
+            : `${isEn ? 'Proxy generation failed, continuing without proxy' : '代理生成失败，将不使用代理继续'}: ${proxyRes.error || 'Proxy generation failed'}`
+        )
+        return undefined
+      }
+      setProxyUrl(proxyRes.proxyUrl)
+      addLog(
+        `${scope === 'batch' ? (isEn ? 'Shared proxy generated' : '已生成共享代理') : isEn ? 'Generated proxy' : '已生成代理'}: ${proxyRes.proxyUrl}`
+      )
+      return proxyRes.proxyUrl
+    },
+    [addLog, isEn, proxyCdpAddress, proxyFormUrl]
+  )
+
   const prepareBrowserConfig = useCallback(
     async (
       baseConfig?: Parameters<typeof window.api.registrationStartBrowser>[0]
     ): Promise<Parameters<typeof window.api.registrationStartBrowser>[0]> => {
       const config = { ...(baseConfig || buildBrowserConfig()) }
-      if (generateProxyEachTime) {
-        addLog(isEn ? 'Generating new proxy from Colab...' : '正在从 Colab 生成新代理...')
-        const proxyRes = await window.api.registrationGenerateColabProxy({
-          cdpAddress: proxyCdpAddress.trim() || undefined,
-          formUrl: proxyFormUrl.trim() || undefined
-        })
-        if (!proxyRes.success || !proxyRes.proxyUrl) {
-          addLog(
-            `${isEn ? 'Proxy generation failed, continuing without proxy' : '代理生成失败，将不使用代理继续'}: ${proxyRes.error || 'Proxy generation failed'}`
-          )
-          config.proxyUrl = undefined
-        } else {
-          config.proxyUrl = proxyRes.proxyUrl
-          setProxyUrl(proxyRes.proxyUrl)
-          addLog(`${isEn ? 'Generated proxy' : '已生成代理'}: ${proxyRes.proxyUrl}`)
-        }
+      // Batch registration may pre-generate one shared proxy and pass it in baseConfig.
+      // Do not generate again when a proxyUrl already exists, otherwise concurrent
+      // browser tasks race the same Colab/CDP session and each task gets a different proxy.
+      if (generateProxyEachTime && !config.proxyUrl) {
+        config.proxyUrl = await generateSharedColabProxy('single')
       }
       return config
     },
-    [buildBrowserConfig, generateProxyEachTime, proxyCdpAddress, proxyFormUrl, addLog, isEn]
+    [buildBrowserConfig, generateProxyEachTime, generateSharedColabProxy]
   )
 
   const isBrowserMode =
@@ -1611,6 +1632,12 @@ export function RegisterPage(): React.JSX.Element {
 
     const config = isBrowserMode ? buildBrowserConfig() : buildAutoConfig()
     const concurrency = Math.max(1, batchConcurrency)
+
+    if (isBrowserMode && generateProxyEachTime) {
+      ;(config as Parameters<typeof window.api.registrationStartBrowser>[0]).proxyUrl =
+        await generateSharedColabProxy('batch')
+    }
+
     let reservedProvidedLines: string[] = []
     if (mode === 'browser-provided-email') {
       let remaining = providedEmailData

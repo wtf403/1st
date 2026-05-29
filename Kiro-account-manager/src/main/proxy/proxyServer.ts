@@ -1168,13 +1168,7 @@ export class ProxyServer {
         supportedInputTypes: ['TEXT'],
         tokenLimits: { maxInputTokens: 200000, maxOutputTokens: 4096 }
       } as KiroModel,
-      {
-        modelId: 'CLAUDE_SONNET_4_20250514_V1_0',
-        modelName: 'Claude Sonnet 4 (CW)',
-        description: 'CodeWhisperer internal ID',
-        supportedInputTypes: ['TEXT', 'IMAGE'],
-        tokenLimits: { maxInputTokens: 200000, maxOutputTokens: 64000 }
-      } as KiroModel,
+
       {
         modelId: 'CLAUDE_HAIKU_4_5_20251001_V1_0',
         modelName: 'Claude Haiku 4.5 (CW)',
@@ -2597,16 +2591,7 @@ export class ProxyServer {
         maxInputTokens: 200000,
         maxOutputTokens: 4096
       }),
-      buildClientModel({
-        id: 'CLAUDE_SONNET_4_20250514_V1_0',
-        created: now,
-        ownedBy: 'kiro-api',
-        description: 'Claude Sonnet 4 (CodeWhisperer internal ID)',
-        modelName: 'Claude Sonnet 4 (CW)',
-        supportedInputTypes: ['TEXT', 'IMAGE'],
-        maxInputTokens: 200000,
-        maxOutputTokens: 64000
-      }),
+
       buildClientModel({
         id: 'CLAUDE_HAIKU_4_5_20251001_V1_0',
         created: now,

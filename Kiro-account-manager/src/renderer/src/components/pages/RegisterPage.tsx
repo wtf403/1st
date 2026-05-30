@@ -598,7 +598,11 @@ export function RegisterPage(): React.JSX.Element {
   // ============ 取消 ============
 
   const cancel = async (): Promise<void> => {
-    await window.api.registrationCancel()
+    if (isBrowserMode) {
+      await window.api.registrationCancelBrowser()
+    } else {
+      await window.api.registrationCancel()
+    }
     addLog(t('register.logCancelled'))
     setPhase('idle')
   }
@@ -1828,26 +1832,11 @@ export function RegisterPage(): React.JSX.Element {
 
   const stopBatch = (): void => {
     batchAbort.current = true
-    window.api.registrationCancel()
-    if (currentTaskCenterId.current) {
-      useTaskStore.getState().cancelTask(currentTaskCenterId.current)
-      currentTaskCenterId.current = null
+    if (isBrowserMode) {
+      window.api.registrationCancelBrowser()
+    } else {
+      window.api.registrationCancel()
     }
-  }
-
-  /** 从失败列表中按筛选条件重试 */
-  const retryFailed = (filter?: 'network' | 'otp_timeout' | 'rate_limit' | 'all'): void => {
-    const failedItems = _batchItems.filter((it) => {
-      if (it.status !== 'failed' && it.status !== 'import_failed') return false
-      if (!filter || filter === 'all') return true
-      return classifyError(it.error) === filter
-    })
-    if (failedItems.length === 0) {
-      addLog(`[Retry] 没有匹配的失败任务可重试`)
-      return
-    }
-    addLog(`[Retry] 重试 ${failedItems.length} 个失败任务（筛选: ${filter || 'all'}）`)
-    void startBatch(failedItems)
   }
 
   // 导入历史中的账号

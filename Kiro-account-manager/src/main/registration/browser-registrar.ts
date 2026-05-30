@@ -747,13 +747,29 @@ export class BrowserRegistrar {
 
     this.log('[Browser] Filling password')
 
-    const fillOk = await win.webContents
+    // Get count of password fields
+    const pwdCount = await win.webContents
       .executeJavaScript(
         `
       (function() {
         const inputs = Array.from(document.querySelectorAll('input[type="password"]'));
-        if (inputs.length === 0) return false;
-        for (const el of inputs) {
+        return inputs.filter(el => !!el.offsetParent).length;
+      })()
+    `
+      )
+      .catch(() => 0)
+
+    this.log(`[Browser] Found ${pwdCount} password field(s)`)
+
+    // Fill each password field sequentially with delays
+    for (let i = 0; i < pwdCount; i++) {
+      const fillOk = await win.webContents
+        .executeJavaScript(
+          `
+        (function() {
+          const inputs = Array.from(document.querySelectorAll('input[type="password"]')).filter(el => !!el.offsetParent);
+          if (${i} >= inputs.length) return false;
+          const el = inputs[${i}];
           el.focus();
           const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
           if (setter) setter.call(el, ${JSON.stringify(password)});
@@ -762,14 +778,22 @@ export class BrowserRegistrar {
           el.dispatchEvent(new Event('change', { bubbles: true }));
           el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
           el.blur();
-        }
-        return true;
-      })()
-    `
-      )
-      .catch(() => false)
+          return true;
+        })()
+      `
+        )
+        .catch(() => false)
 
-    if (!fillOk) await typeInto(win, 'input[type="password"]', password)
+      if (!fillOk) {
+        // Fallback: use typeInto for the first field only
+        if (i === 0) await typeInto(win, 'input[type="password"]', password)
+      }
+
+      // Add delay between fields to allow React state updates
+      if (i < pwdCount - 1) {
+        await randomDelay(300, 600)
+      }
+    }
 
     await randomDelay(800, 1500)
 

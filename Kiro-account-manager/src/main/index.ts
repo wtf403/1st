@@ -5,7 +5,12 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { writeFile, readFile } from 'fs/promises'
 import { encode, decode } from 'cbor-x'
-import { fetch as undiciFetch, type RequestInit as UndiciRequestInit, type Dispatcher } from 'undici'
+import {
+  fetch as undiciFetch,
+  ProxyAgent,
+  type RequestInit as UndiciRequestInit,
+  type Dispatcher
+} from 'undici'
 import icon from '../../resources/icon.png?asset'
 import {
   ProxyServer,
@@ -32,7 +37,7 @@ import {
   setLogStreamEvents,
   setPayloadSizeLimitKB
 } from './proxy/kiroApi'
-import { getSystemProxy } from './proxy/systemProxy'
+import { getSystemProxy, safeCreateProxyAgent } from './proxy/systemProxy'
 import { proxyLogStore, interceptConsole } from './proxy/logger'
 import { registerIPCHandlers as registerRegistrationHandlers } from './registration/ipc-handlers'
 import { BrowserRegistrar, type BrowserRegistrationConfig } from './registration/browser-registrar'
@@ -217,7 +222,10 @@ async function fetchWithAppProxy(
   if (overrideProxyUrl) {
     const accountAgent = safeCreateProxyAgent(overrideProxyUrl)
     if (accountAgent) {
-      return await undiciFetch(url, { ...options, dispatcher: accountAgent } as UndiciRequestInit) as unknown as Response
+      return (await undiciFetch(url, {
+        ...options,
+        dispatcher: accountAgent
+      } as UndiciRequestInit)) as unknown as Response
     }
   }
   const agent = getNetworkAgent()
@@ -950,7 +958,7 @@ async function refreshOidcToken(
   clientId: string,
   clientSecret: string,
   region: string = 'us-east-1',
-  proxyUrl?: string  // 账号绑定的代理 URL（可选，优先级最高）
+  proxyUrl?: string // 账号绑定的代理 URL（可选，优先级最高）
 ): Promise<OidcRefreshResult> {
   console.log(`[OIDC] Refreshing token with clientId: ${clientId.substring(0, 20)}...`)
 
@@ -1038,7 +1046,7 @@ async function refreshTokenByMethod(
   clientSecret: string,
   region: string = 'us-east-1',
   authMethod?: string,
-  proxyUrl?: string  // 账号绑定的代理 URL（可选，优先级最高）
+  proxyUrl?: string // 账号绑定的代理 URL（可选，优先级最高）
 ): Promise<OidcRefreshResult> {
   // 如果是社交登录，使用 Kiro Auth Service 刷新
   if (authMethod === 'social') {
@@ -2551,178 +2559,217 @@ app.whenReady().then(async () => {
    * 测试一组目标 URL 的连通性（用于诊断面板）
    * 支持指定代理 URL；返回每个目标的延迟与错误
    */
-  ipcMain.handle('diagnose:run', async (_event, params: {
-    proxyUrl?: string
-    targets: Array<{ id: string; label: string; url: string; timeoutMs?: number; expectStatus?: number[] }>
-  }) => {
-    const { proxyUrl, targets } = params || {}
-    const agent = proxyUrl ? safeCreateProxyAgent(proxyUrl) : undefined
-
-    const results = await Promise.all((targets || []).map(async (t) => {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), t.timeoutMs ?? 8000)
-      const start = Date.now()
-      try {
-        const init: UndiciRequestInit = {
-          method: 'GET',
-          signal: controller.signal,
-          headers: { 'User-Agent': 'KiroAccountManager-Diagnose/1.0' }
-        }
-        if (agent) init.dispatcher = agent
-        const resp = await undiciFetch(t.url, init)
-        const latencyMs = Date.now() - start
-        const expected = t.expectStatus
-        const ok = expected ? expected.includes(resp.status) : (resp.status >= 200 && resp.status < 400)
-        return {
-          id: t.id,
-          label: t.label,
-          url: t.url,
-          success: ok,
-          httpStatus: resp.status,
-          latencyMs,
-          error: ok ? undefined : `HTTP ${resp.status}`
-        }
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
-        return {
-          id: t.id,
-          label: t.label,
-          url: t.url,
-          success: false,
-          latencyMs: Date.now() - start,
-          error: controller.signal.aborted ? '超时' : errMsg
-        }
-      } finally {
-        clearTimeout(timer)
+  ipcMain.handle(
+    'diagnose:run',
+    async (
+      _event,
+      params: {
+        proxyUrl?: string
+        targets: Array<{
+          id: string
+          label: string
+          url: string
+          timeoutMs?: number
+          expectStatus?: number[]
+        }>
       }
-    }))
+    ) => {
+      const { proxyUrl, targets } = params || {}
+      const agent = proxyUrl ? safeCreateProxyAgent(proxyUrl) : undefined
 
-    return { results }
-  })
+      const results = await Promise.all(
+        (targets || []).map(async (t) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => controller.abort(), t.timeoutMs ?? 8000)
+          const start = Date.now()
+          try {
+            const init: UndiciRequestInit = {
+              method: 'GET',
+              signal: controller.signal,
+              headers: { 'User-Agent': 'KiroAccountManager-Diagnose/1.0' }
+            }
+            if (agent) init.dispatcher = agent
+            const resp = await undiciFetch(t.url, init)
+            const latencyMs = Date.now() - start
+            const expected = t.expectStatus
+            const ok = expected
+              ? expected.includes(resp.status)
+              : resp.status >= 200 && resp.status < 400
+            return {
+              id: t.id,
+              label: t.label,
+              url: t.url,
+              success: ok,
+              httpStatus: resp.status,
+              latencyMs,
+              error: ok ? undefined : `HTTP ${resp.status}`
+            }
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err)
+            return {
+              id: t.id,
+              label: t.label,
+              url: t.url,
+              success: false,
+              latencyMs: Date.now() - start,
+              error: controller.signal.aborted ? '超时' : errMsg
+            }
+          } finally {
+            clearTimeout(timer)
+          }
+        })
+      )
+
+      return { results }
+    }
+  )
 
   // ============ 代理池验活 ============
   /**
    * 通过指定代理 URL 请求测试地址，返回延迟与出口 IP
    * 仅支持 http/https 协议代理（受 undici ProxyAgent 限制；socks 协议会被 safeCreateProxyAgent 静默跳过）
    */
-  ipcMain.handle('proxy-pool:validate', async (_event, params: {
-    url: string
-    testUrl?: string
-    timeoutMs?: number
-  }) => {
-    const { url, testUrl = 'https://api.ipify.org?format=json', timeoutMs = 8000 } = params || {}
-    if (!url) {
-      return { success: false, error: 'Missing proxy URL' }
-    }
-
-    const agent = safeCreateProxyAgent(url)
-    if (!agent) {
-      // SOCKS / 无效协议会走到这里
-      return {
-        success: false,
-        error: '代理协议不支持（仅支持 http/https）或 URL 无效'
+  ipcMain.handle(
+    'proxy-pool:validate',
+    async (
+      _event,
+      params: {
+        url: string
+        testUrl?: string
+        timeoutMs?: number
       }
-    }
+    ) => {
+      const { url, testUrl = 'https://api.ipify.org?format=json', timeoutMs = 8000 } = params || {}
+      if (!url) {
+        return { success: false, error: 'Missing proxy URL' }
+      }
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
-    const start = Date.now()
-    try {
-      const resp = await undiciFetch(testUrl, {
-        method: 'GET',
-        dispatcher: agent,
-        signal: controller.signal,
-        headers: { 'User-Agent': 'KiroAccountManager-ProxyValidator/1.0' }
-      } as UndiciRequestInit)
-      const latencyMs = Date.now() - start
-      if (resp.status >= 200 && resp.status < 400) {
-        // 尝试提取出口 IP
-        let externalIp: string | undefined
-        try {
-          const ct = resp.headers.get('content-type') || ''
-          if (ct.includes('json')) {
-            const body = await resp.json() as { ip?: string; query?: string }
-            externalIp = body.ip || body.query
-          } else {
-            const text = await resp.text()
-            const m = text.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/)
-            if (m) externalIp = m[0]
+      const agent = safeCreateProxyAgent(url)
+      if (!agent) {
+        // SOCKS / 无效协议会走到这里
+        return {
+          success: false,
+          error: '代理协议不支持（仅支持 http/https）或 URL 无效'
+        }
+      }
+
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      const start = Date.now()
+      try {
+        const resp = await undiciFetch(testUrl, {
+          method: 'GET',
+          dispatcher: agent,
+          signal: controller.signal,
+          headers: { 'User-Agent': 'KiroAccountManager-ProxyValidator/1.0' }
+        } as UndiciRequestInit)
+        const latencyMs = Date.now() - start
+        if (resp.status >= 200 && resp.status < 400) {
+          // 尝试提取出口 IP
+          let externalIp: string | undefined
+          try {
+            const ct = resp.headers.get('content-type') || ''
+            if (ct.includes('json')) {
+              const body = (await resp.json()) as { ip?: string; query?: string }
+              externalIp = body.ip || body.query
+            } else {
+              const text = await resp.text()
+              const m = text.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/)
+              if (m) externalIp = m[0]
+            }
+          } catch {
+            /* 出口 IP 提取失败不影响验活成功 */
           }
-        } catch { /* 出口 IP 提取失败不影响验活成功 */ }
-        return { success: true, latencyMs, externalIp }
+          return { success: true, latencyMs, externalIp }
+        }
+        return { success: false, latencyMs, error: `HTTP ${resp.status}` }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        const isAbort = controller.signal.aborted
+        return {
+          success: false,
+          latencyMs: Date.now() - start,
+          error: isAbort ? `请求超时 (${timeoutMs}ms)` : errMsg
+        }
+      } finally {
+        clearTimeout(timer)
       }
-      return { success: false, latencyMs, error: `HTTP ${resp.status}` }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      const isAbort = controller.signal.aborted
-      return {
-        success: false,
-        latencyMs: Date.now() - start,
-        error: isAbort ? `请求超时 (${timeoutMs}ms)` : errMsg
-      }
-    } finally {
-      clearTimeout(timer)
     }
-  })
+  )
 
   // ============ 账号-代理绑定（反代时 N 账号一个 IP）============
   /**
    * 设置账号在反代场景下使用的出口代理 URL
    * 同时更新：反代账号池里现存的 ProxyAccount.proxyUrl + store 持久化的 accountProxyBindings
    */
-  ipcMain.handle('account-set-proxy-binding', async (_event, accountId: string, proxyUrl: string | undefined) => {
-    try {
-      if (!accountId) return { success: false }
-      // 更新反代账号池内存中的 proxyUrl
-      if (proxyServer) {
-        const pool = proxyServer.getAccountPool()
-        const acc = pool.getAccount(accountId)
-        if (acc) {
-          acc.proxyUrl = proxyUrl || undefined
-          console.log(`[ProxyServer] Account ${acc.email || accountId.slice(0, 8)} proxy ${proxyUrl ? `bound to ${proxyUrl.replace(/:([^:@/]+)@/, ':***@')}` : 'unbound'}`)
+  ipcMain.handle(
+    'account-set-proxy-binding',
+    async (_event, accountId: string, proxyUrl: string | undefined) => {
+      try {
+        if (!accountId) return { success: false }
+        // 更新反代账号池内存中的 proxyUrl
+        if (proxyServer) {
+          const pool = proxyServer.getAccountPool()
+          const acc = pool.getAccount(accountId)
+          if (acc) {
+            acc.proxyUrl = proxyUrl || undefined
+            console.log(
+              `[ProxyServer] Account ${acc.email || accountId.slice(0, 8)} proxy ${proxyUrl ? `bound to ${proxyUrl.replace(/:([^:@/]+)@/, ':***@')}` : 'unbound'}`
+            )
+          }
         }
+        return { success: true }
+      } catch (err) {
+        console.error('[account-set-proxy-binding] error:', err)
+        return { success: false }
       }
-      return { success: true }
-    } catch (err) {
-      console.error('[account-set-proxy-binding] error:', err)
-      return { success: false }
     }
-  })
+  )
 
   // ============ 通用 HTTP 诊断探测 ============
   /**
    * 使用应用代理设置发起一次 GET/HEAD 请求，返回延迟、状态码、错误信息。
    * 用于"一键诊断"面板中检测 Kiro API / 邮箱服务 / 公网连通性。
    */
-  ipcMain.handle('diagnose:http-probe', async (_event, params: {
-    url: string
-    method?: 'GET' | 'HEAD'
-    timeoutMs?: number
-  }) => {
-    const { url, method = 'GET', timeoutMs = 5000 } = params || {}
-    if (!url) return { success: false, error: 'Missing url' }
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
-    const start = Date.now()
-    try {
-      const resp = await fetchWithAppProxy(url, {
-        method,
-        signal: controller.signal,
-        headers: { 'User-Agent': 'KiroAccountManager-Diagnose/1.0' }
-      })
-      const latencyMs = Date.now() - start
-      return { success: resp.ok, latencyMs, status: resp.status }
-    } catch (err) {
-      const isAbort = controller.signal.aborted
-      return {
-        success: false,
-        latencyMs: Date.now() - start,
-        error: isAbort ? `Timeout (${timeoutMs}ms)` : (err instanceof Error ? err.message : String(err))
+  ipcMain.handle(
+    'diagnose:http-probe',
+    async (
+      _event,
+      params: {
+        url: string
+        method?: 'GET' | 'HEAD'
+        timeoutMs?: number
       }
-    } finally {
-      clearTimeout(timer)
+    ) => {
+      const { url, method = 'GET', timeoutMs = 5000 } = params || {}
+      if (!url) return { success: false, error: 'Missing url' }
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      const start = Date.now()
+      try {
+        const resp = await fetchWithAppProxy(url, {
+          method,
+          signal: controller.signal,
+          headers: { 'User-Agent': 'KiroAccountManager-Diagnose/1.0' }
+        })
+        const latencyMs = Date.now() - start
+        return { success: resp.ok, latencyMs, status: resp.status }
+      } catch (err) {
+        const isAbort = controller.signal.aborted
+        return {
+          success: false,
+          latencyMs: Date.now() - start,
+          error: isAbort
+            ? `Timeout (${timeoutMs}ms)`
+            : err instanceof Error
+              ? err.message
+              : String(err)
+        }
+      } finally {
+        clearTimeout(timer)
+      }
     }
-  })
+  )
 
   // IPC: 加载账号数据
   ipcMain.handle('load-accounts', async () => {
@@ -2768,10 +2815,12 @@ app.whenReady().then(async () => {
 
       // 查找账号绑定的代理 URL（账号池中已有 proxyUrl 字段）
       const boundProxyUrl = proxyServer
-        ? (proxyServer.getAccountPool().getAccount(account.id || '')?.proxyUrl)
+        ? proxyServer.getAccountPool().getAccount(account.id || '')?.proxyUrl
         : undefined
 
-      console.log(`[IPC] Refreshing token (authMethod: ${authMethod || 'IdC'})...${boundProxyUrl ? ' [via bound proxy]' : ''}`)
+      console.log(
+        `[IPC] Refreshing token (authMethod: ${authMethod || 'IdC'})...${boundProxyUrl ? ' [via bound proxy]' : ''}`
+      )
 
       // 根据 authMethod 选择刷新方式（透传账号绑定代理）
       const refreshResult = await refreshTokenByMethod(

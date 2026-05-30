@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { AccountManager } from './components/accounts'
 import { Sidebar, type PageType } from './components/layout'
 import {
@@ -11,11 +11,16 @@ import {
   KProxyPage,
   RegisterPage,
   SubscriptionPage,
-  LogsPage
+  LogsPage,
+  ProxyPoolPage,
+  WebhooksPage,
+  DiagnosePage,
+  ConfigSyncPage
 } from './components/pages'
 import { UpdateDialog } from './components/UpdateDialog'
 import { CloseConfirmDialog } from './components/CloseConfirmDialog'
 import { useAccountsStore } from './store/accounts'
+import { useWebhookStore } from './store/webhooks'
 
 // 托盘信息防抖延迟：后台刷新风暴时合并多次跨进程 IPC 为单次
 const TRAY_UPDATE_DEBOUNCE_MS = 400
@@ -32,6 +37,7 @@ function App(): React.JSX.Element {
     stopAutoTokenRefresh,
     handleBackgroundRefreshResult,
     handleBackgroundCheckResult,
+    flushSaveImmediately,
     accounts,
     activeAccountId,
     setActiveAccount,
@@ -115,10 +121,13 @@ function App(): React.JSX.Element {
         // 规范化 level（main 用 'error'/'info' 等字符串字面量，需要映射到 store 接受的类型）
         const rawLevel = (payload as { level?: string })?.level
         const level: 'info' | 'warn' | 'error' | 'success' =
-          rawLevel === 'error' ? 'error'
-          : rawLevel === 'info' ? 'info'
-          : rawLevel === 'success' ? 'success'
-          : 'warn'
+          rawLevel === 'error'
+            ? 'error'
+            : rawLevel === 'info'
+              ? 'info'
+              : rawLevel === 'success'
+                ? 'success'
+                : 'warn'
         void store.triggerEvent(targetEvent, {
           title: String((payload as Record<string, unknown>).title ?? '反代告警'),
           message: String((payload as Record<string, unknown>).message ?? ''),
@@ -129,12 +138,16 @@ function App(): React.JSX.Element {
         console.error('[App] Proxy webhook trigger failed:', err)
       }
     })
-    return () => { unsubscribe?.() }
+    return () => {
+      unsubscribe?.()
+    }
   }, [])
 
   // 关闭/刷新前强制 flush 防抖中的待保存数据，防止数据丢失
   useEffect(() => {
-    const handleBeforeUnload = (): void => { void flushSaveImmediately() }
+    const handleBeforeUnload = (): void => {
+      void flushSaveImmediately()
+    }
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
@@ -198,14 +211,15 @@ function App(): React.JSX.Element {
 
   // 监听后台刷新结果
   useEffect(() => {
-    const refreshBuffer: Array<{ id: string; success: boolean; data?: unknown; error?: string }> = []
+    const refreshBuffer: Array<{ id: string; success: boolean; data?: unknown; error?: string }> =
+      []
     let flushTimer: ReturnType<typeof setTimeout> | null = null
 
     const flush = (): void => {
       flushTimer = null
       if (refreshBuffer.length === 0) return
       const batch = refreshBuffer.splice(0)
-      applyBackgroundRefreshResults(batch)
+      batch.forEach(handleBackgroundRefreshResult)
     }
 
     const unsubscribe = window.api.onBackgroundRefreshResult((data) => {
@@ -222,7 +236,7 @@ function App(): React.JSX.Element {
         flush()
       }
     }
-  }, [applyBackgroundRefreshResults])
+  }, [handleBackgroundRefreshResult])
 
   // 监听后台检查结果：同样的批量化策略
   useEffect(() => {
@@ -233,7 +247,7 @@ function App(): React.JSX.Element {
       flushTimer = null
       if (checkBuffer.length === 0) return
       const batch = checkBuffer.splice(0)
-      applyBackgroundCheckResults(batch)
+      batch.forEach(handleBackgroundCheckResult)
     }
 
     const unsubscribe = window.api.onBackgroundCheckResult((data) => {
@@ -249,7 +263,7 @@ function App(): React.JSX.Element {
         flush()
       }
     }
-  }, [applyBackgroundCheckResults])
+  }, [handleBackgroundCheckResult])
 
   const renderPage = () => {
     switch (currentPage) {

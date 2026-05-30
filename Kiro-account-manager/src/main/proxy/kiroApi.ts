@@ -2,7 +2,7 @@
 import { createHash } from 'crypto'
 import { release } from 'os'
 import { v4 as uuidv4 } from 'uuid'
-import { fetch as undiciFetch, type RequestInit as UndiciRequestInit, type Dispatcher } from 'undici'
+import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit } from 'undici'
 import type {
   KiroPayload,
   KiroCurrentMessage,
@@ -20,7 +20,7 @@ import type {
 } from './types'
 import { proxyLogger } from './logger'
 import { getKProxyService } from '../kproxy'
-import { getSystemProxy } from './systemProxy'
+import { getSystemProxy, safeCreateProxyAgent } from './systemProxy'
 
 // Whether provider calls should be routed through K-Proxy MITM.
 let useKProxyForApi = false
@@ -93,7 +93,11 @@ function describeError(error: unknown): string {
 // 获取网络代理 agent。K-Proxy 开启时优先通过 K-Proxy MITM，确保 provider 侧看到
 // 与 Kiro/browser 一致的 device-id 行为；否则使用用户/系统代理（但避免无意中把系统代理
 // 指回 K-Proxy 导致递归）。
-function getNetworkAgent(): ProxyAgent | undefined {
+function getNetworkAgent(account?: ProxyAccount): import('undici').Dispatcher | undefined {
+  if (account?.proxyUrl) {
+    const accountAgent = safeCreateProxyAgent(account.proxyUrl)
+    if (accountAgent) return accountAgent
+  }
   if (useKProxyForApi) {
     const kproxyService = getKProxyService()
     if (kproxyService?.isRunning()) {
@@ -123,7 +127,11 @@ function getNetworkAgent(): ProxyAgent | undefined {
  * 使用代理的 fetch 函数
  * 传入 account 时会优先使用账号绑定的代理（账号-代理 N:1 分桶）
  */
-async function fetchWithProxy(url: string, options: RequestInit, account?: ProxyAccount): Promise<Response> {
+async function fetchWithProxy(
+  url: string,
+  options: RequestInit,
+  account?: ProxyAccount
+): Promise<Response> {
   const agent = getNetworkAgent(account)
   if (agent) {
     proxyLogger.debug('KiroAPI', `Using proxy agent: ${agent.constructor.name}`)

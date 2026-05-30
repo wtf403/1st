@@ -68,15 +68,10 @@ let _statsCache: {
  * 异步执行，避免阻塞首屏加载（isLoading）。
  */
 type SetFn = (
-  partial:
-    | Partial<AccountsState>
-    | ((state: AccountsState) => Partial<AccountsState>)
+  partial: Partial<AccountsState> | ((state: AccountsState) => Partial<AccountsState>)
 ) => void
 
-async function syncLocalSsoAccountAsync(
-  get: () => AccountsStore,
-  set: SetFn
-): Promise<void> {
+async function syncLocalSsoAccountAsync(get: () => AccountsStore, set: SetFn): Promise<void> {
   try {
     const localResult = await window.api.getLocalActiveAccount()
     if (!localResult.success || !localResult.data?.refreshToken) return
@@ -142,7 +137,9 @@ async function syncLocalSsoAccountAsync(
         clientId: importResult.data.clientId || '',
         clientSecret: importResult.data.clientSecret || '',
         region: importResult.data.region || 'us-east-1',
-        expiresAt: verifyResult.data.expiresIn ? now + verifyResult.data.expiresIn * 1000 : now + 3600 * 1000,
+        expiresAt: verifyResult.data.expiresIn
+          ? now + verifyResult.data.expiresIn * 1000
+          : now + 3600 * 1000,
         authMethod: importResult.data.authMethod as 'IdC' | 'social',
         provider: (importResult.data.provider || 'BuilderId') as 'BuilderId' | 'Github' | 'Google'
       },
@@ -159,9 +156,10 @@ async function syncLocalSsoAccountAsync(
       usage: {
         current: verifyResult.data.usage.current,
         limit: verifyResult.data.usage.limit,
-        percentUsed: verifyResult.data.usage.limit > 0
-          ? verifyResult.data.usage.current / verifyResult.data.usage.limit
-          : 0,
+        percentUsed:
+          verifyResult.data.usage.limit > 0
+            ? verifyResult.data.usage.current / verifyResult.data.usage.limit
+            : 0,
         lastUpdated: now,
         baseLimit: verifyResult.data.usage.baseLimit,
         baseCurrent: verifyResult.data.usage.baseCurrent,
@@ -472,7 +470,10 @@ interface AccountsActions {
 
   // ============ 代理池操作 ============
   /** 添加单个代理（自动解析协议/主机/端口/认证） */
-  addProxy: (url: string, options?: { label?: string; source?: string; tags?: string[] }) => string | null
+  addProxy: (
+    url: string,
+    options?: { label?: string; source?: string; tags?: string[] }
+  ) => string | null
   /** 批量导入（文本，每行一个，支持 http://host:port、socks5://user:pass@host:port、host:port 等） */
   importProxies: (text: string) => { added: number; skipped: number; failed: number }
   /** 删除代理 */
@@ -514,7 +515,7 @@ interface AccountsActions {
   autoDistributeAccountsToProxies: (params: {
     accountsPerProxy?: number
     onlyUnbound?: boolean
-    accountIds?: string[]  // 限定分配范围，不填则全部
+    accountIds?: string[] // 限定分配范围，不填则全部
   }) => { distributed: number; perProxy: Record<string, number>; skipped: number }
   /** 读取账号绑定的代理 URL（供主进程同步用） */
   getAccountProxyUrl: (accountId: string) => string | undefined
@@ -1650,7 +1651,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
       if (data) {
         const accounts = new Map(Object.entries(data.accounts ?? {}) as [string, Account][])
-        const activeAccountId = data.activeAccountId ?? null
+        let activeAccountId = data.activeAccountId ?? null
 
         // 为没有 machineId 的现有账户生成一个
         let needsSave = false
@@ -1812,9 +1813,13 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           proxyPool: data.proxyPool
             ? new Map(Object.entries(data.proxyPool as Record<string, ProxyEntry>))
             : new Map<string, ProxyEntry>(),
-          proxyPoolConfig: { ...DEFAULT_PROXY_POOL_CONFIG, ...(data.proxyPoolConfig as Partial<ProxyPoolConfig> | undefined) },
+          proxyPoolConfig: {
+            ...DEFAULT_PROXY_POOL_CONFIG,
+            ...(data.proxyPoolConfig as Partial<ProxyPoolConfig> | undefined)
+          },
           proxyPoolCursor: typeof data.proxyPoolCursor === 'number' ? data.proxyPoolCursor : 0,
-          accountProxyBindings: (data.accountProxyBindings as Record<string, string> | undefined) || {}
+          accountProxyBindings:
+            (data.accountProxyBindings as Record<string, string> | undefined) || {}
         })
 
         // 应用主题
@@ -1841,7 +1846,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
         // SSO 同步（含潜在网络请求）异步执行，不阻塞首屏加载
         // 完成后通过 set 应用结果，UI 会自然更新
-        queueMicrotask(() => { void syncLocalSsoAccountAsync(get, set) })
+        queueMicrotask(() => {
+          void syncLocalSsoAccountAsync(get, set)
+        })
       }
     } catch (error) {
       console.error('Failed to load accounts:', error)
@@ -3029,7 +3036,11 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     // 去重：同 host:port 视为重复
     const existingPool = get().proxyPool
     for (const entry of existingPool.values()) {
-      if (entry.host === parsed.host && entry.port === parsed.port && entry.protocol === parsed.protocol) {
+      if (
+        entry.host === parsed.host &&
+        entry.port === parsed.port &&
+        entry.protocol === parsed.protocol
+      ) {
         return null
       }
     }
@@ -3064,7 +3075,10 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   importProxies: (text) => {
     const result = { added: 0, skipped: 0, failed: 0 }
-    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#'))
     if (lines.length === 0) return result
 
     // 批量构造新条目，最后只 set 一次，避免 O(n²) re-render
@@ -3077,9 +3091,15 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     for (const line of lines) {
       const parsed = parseProxyUrl(line)
-      if (!parsed) { result.failed++; continue }
+      if (!parsed) {
+        result.failed++
+        continue
+      }
       const key = `${parsed.protocol}://${parsed.host}:${parsed.port}`
-      if (existingKeys.has(key)) { result.skipped++; continue }
+      if (existingKeys.has(key)) {
+        result.skipped++
+        continue
+      }
       existingKeys.add(key)
       newEntries.push({
         id: uuidv4(),
@@ -3207,7 +3227,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       if (existing) {
         const latencyMs = result.latencyMs
         const status: ProxyEntry['status'] = result.success
-          ? (latencyMs !== undefined && latencyMs > 3000 ? 'slow' : 'alive')
+          ? latencyMs !== undefined && latencyMs > 3000
+            ? 'slow'
+            : 'alive'
           : 'dead'
         next.set(id, {
           ...existing,
@@ -3220,9 +3242,10 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           // 自动停用：累计失败超过阈值
           enabled: result.success
             ? existing.enabled
-            : (state.proxyPoolConfig.autoDisableDead && existing.failCount + 1 >= state.proxyPoolConfig.failureThreshold
+            : state.proxyPoolConfig.autoDisableDead &&
+                existing.failCount + 1 >= state.proxyPoolConfig.failureThreshold
               ? false
-              : existing.enabled)
+              : existing.enabled
         })
       }
       return { proxyPool: next }
@@ -3240,10 +3263,16 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     const worker = async (): Promise<void> => {
       while (cursor < ids.length) {
         const idx = cursor++
-        try { await validateProxy(ids[idx]) } catch { /* per-item error logged */ }
+        try {
+          await validateProxy(ids[idx])
+        } catch {
+          /* per-item error logged */
+        }
       }
     }
-    const workers = Array.from({ length: Math.max(1, Math.min(concurrency, ids.length)) }, () => worker())
+    const workers = Array.from({ length: Math.max(1, Math.min(concurrency, ids.length)) }, () =>
+      worker()
+    )
     await Promise.all(workers)
   },
 
@@ -3267,8 +3296,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     if (!proxyPoolConfig.enabled) return null
 
     // 仅在启用且非 dead 的代理中挑选
-    const candidates = Array.from(proxyPool.values())
-      .filter(p => p.enabled && p.status !== 'dead')
+    const candidates = Array.from(proxyPool.values()).filter(
+      (p) => p.enabled && p.status !== 'dead'
+    )
     if (candidates.length === 0) return null
 
     let picked: ProxyEntry
@@ -3301,7 +3331,11 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       const next = new Map(state.proxyPool)
       const existing = next.get(picked.id)
       if (existing) {
-        next.set(picked.id, { ...existing, usedCount: existing.usedCount + 1, lastUsedAt: Date.now() })
+        next.set(picked.id, {
+          ...existing,
+          usedCount: existing.usedCount + 1,
+          lastUsedAt: Date.now()
+        })
       }
       return { proxyPool: next }
     })
@@ -3316,9 +3350,10 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       const existing = next.get(id)
       if (!existing) return state
       const failCount = success ? existing.failCount : existing.failCount + 1
-      const autoDisable = !success
-        && state.proxyPoolConfig.autoDisableDead
-        && failCount >= state.proxyPoolConfig.failureThreshold
+      const autoDisable =
+        !success &&
+        state.proxyPoolConfig.autoDisableDead &&
+        failCount >= state.proxyPoolConfig.failureThreshold
       autoDisabled = autoDisable
       next.set(id, {
         ...existing,
@@ -3378,8 +3413,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   autoDistributeAccountsToProxies: ({ accountsPerProxy = 0, onlyUnbound = false, accountIds }) => {
     const state = get()
-    const aliveProxies = Array.from(state.proxyPool.values())
-      .filter((p) => p.enabled && p.status !== 'dead')
+    const aliveProxies = Array.from(state.proxyPool.values()).filter(
+      (p) => p.enabled && p.status !== 'dead'
+    )
     if (aliveProxies.length === 0) {
       return { distributed: 0, perProxy: {}, skipped: 0 }
     }
@@ -3397,7 +3433,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     }
 
     const perProxy: Record<string, number> = {}
-    aliveProxies.forEach((p) => { perProxy[p.id] = 0 })
+    aliveProxies.forEach((p) => {
+      perProxy[p.id] = 0
+    })
     const newBindings = { ...state.accountProxyBindings }
 
     // 取消已绑定到失效/不存在代理的账号（仅 onlyUnbound=false 时统一重新分配）
@@ -3549,7 +3587,8 @@ function parseProxyUrl(raw: string): ParsedProxy | null {
     if (!host || !Number.isFinite(port)) return null
     return {
       protocol: 'http',
-      host, port,
+      host,
+      port,
       username: user || undefined,
       password: pass || undefined,
       normalized: buildProxyUrl('http', host, port, user, pass)
@@ -3565,7 +3604,8 @@ function parseProxyUrl(raw: string): ParsedProxy | null {
     if (!host || !Number.isFinite(port)) return null
     return {
       protocol: 'http',
-      host, port,
+      host,
+      port,
       username: user || undefined,
       password: pass || undefined,
       normalized: buildProxyUrl('http', host, port, user, pass)
@@ -3596,10 +3636,13 @@ function normalizeProtocol(raw: string): ProxyProtocol | null {
 
 function defaultPort(protocol: ProxyProtocol): number {
   switch (protocol) {
-    case 'http': return 8080
-    case 'https': return 443
+    case 'http':
+      return 8080
+    case 'https':
+      return 443
     case 'socks5':
-    case 'socks4': return 1080
+    case 'socks4':
+      return 1080
   }
 }
 

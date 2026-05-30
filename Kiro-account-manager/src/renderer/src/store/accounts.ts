@@ -2480,17 +2480,18 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       set((state) => {
         const accounts = new Map(state.accounts)
         const account = accounts.get(id)
-        if (!account) continue
-
-        if (!success) {
+        if (account) {
           accounts.set(id, {
             ...account,
             status: 'error',
             lastError: error,
-            lastCheckedAt: now
+            lastCheckedAt: Date.now()
           })
-          continue
         }
+        return { accounts }
+      })
+      return
+    }
 
     // 更新账号状态
     set((state) => {
@@ -2610,7 +2611,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         lastError: newError,
         lastCheckedAt: now
       })
-      } // end for-loop
 
       return { accounts }
     })
@@ -2654,17 +2654,18 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       set((state) => {
         const accounts = new Map(state.accounts)
         const account = accounts.get(id)
-        if (!account) continue
-
-        if (!success) {
+        if (account) {
           accounts.set(id, {
             ...account,
             status: 'error',
             lastError: error,
-            lastCheckedAt: now
+            lastCheckedAt: Date.now()
           })
-          continue
         }
+        return { accounts }
+      })
+      return
+    }
 
     // 更新账号状态
     set((state) => {
@@ -2777,7 +2778,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         lastError: newError,
         lastCheckedAt: now
       })
-      } // end for-loop
 
       return { accounts }
     })

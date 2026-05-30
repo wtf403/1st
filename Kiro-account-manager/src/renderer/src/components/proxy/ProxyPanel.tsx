@@ -43,6 +43,7 @@ import { ModelsDialog } from './ModelsDialog'
 import { ModelMappingDialog } from './ModelMappingDialog'
 import { AccountSelectDialog } from './AccountSelectDialog'
 import { ApiKeyManager } from './ApiKeyManager'
+import { ProxySecurityPanel } from './ProxySecurityPanel'
 import { ClientConfigDialog } from './ClientConfigDialog'
 import { createPortal } from 'react-dom'
 

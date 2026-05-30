@@ -914,7 +914,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   },
 
   getFilteredAccounts: () => {
-    const { accounts, filter, sort } = get()
+    const { accounts, filter, sort, activeGroupTab } = get()
 
     // 引用缓存命中：返回上次结果（数组同引用，便于消费方 useMemo 复用）
     if (

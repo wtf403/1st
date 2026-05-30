@@ -303,7 +303,10 @@ function buildClientModel(input: {
 
 // 请求体超限错误（统一识别用，触发 413 响应）
 class BodyTooLargeError extends Error {
-  constructor(public readonly received: number, public readonly limit: number) {
+  constructor(
+    public readonly received: number,
+    public readonly limit: number
+  ) {
     super(`Request body too large: ${received} bytes exceeds limit of ${limit} bytes`)
     this.name = 'BodyTooLargeError'
   }
@@ -311,7 +314,7 @@ class BodyTooLargeError extends Error {
 
 export class ProxyServer {
   private server: http.Server | https.Server | null = null
-  private fallbackServer: http.Server | null = null  // HTTPS 启用时同时监听 HTTP（可选）
+  private fallbackServer: http.Server | null = null // HTTPS 启用时同时监听 HTTP（可选）
   private accountPool: AccountPool
   private config: ProxyConfig
   private stats: ProxyStats
@@ -431,8 +434,11 @@ export class ProxyServer {
   private isBindingExternal(host?: string): boolean {
     if (!host) return false
     const h = host.toLowerCase().trim()
-    return h === '0.0.0.0' || h === '::' || h === '*' || (
-      h !== '127.0.0.1' && h !== '::1' && h !== 'localhost'
+    return (
+      h === '0.0.0.0' ||
+      h === '::' ||
+      h === '*' ||
+      (h !== '127.0.0.1' && h !== '::1' && h !== 'localhost')
     )
   }
 
@@ -445,18 +451,21 @@ export class ProxyServer {
 
     // P0-2 安全护栏：外网绑定 + 无 API Key → 拒绝启动（用户可以显式 allowExternalWithoutApiKey 解除）
     if (this.isBindingExternal(this.config.host)) {
-      const hasAnyKey = (this.config.apiKeys?.some(k => k.enabled && k.key) ?? false) || !!this.config.apiKey
+      const hasAnyKey =
+        (this.config.apiKeys?.some((k) => k.enabled && k.key) ?? false) || !!this.config.apiKey
       if (!hasAnyKey && !this.config.allowExternalWithoutApiKey) {
         const err = new Error(
           `[Security] Refused to start: host=${this.config.host} exposes to network but no API Key configured. ` +
-          `Set at least one API Key, or change host to 127.0.0.1, or set allowExternalWithoutApiKey=true (NOT RECOMMENDED).`
+            `Set at least one API Key, or change host to 127.0.0.1, or set allowExternalWithoutApiKey=true (NOT RECOMMENDED).`
         )
         console.error('[ProxyServer]', err.message)
         this.events.onError?.(err)
         throw err
       }
       if (!hasAnyKey) {
-        console.warn(`[ProxyServer] [Security] WARNING: binding to ${this.config.host} without API Key (allowExternalWithoutApiKey=true). This exposes your accounts to the network!`)
+        console.warn(
+          `[ProxyServer] [Security] WARNING: binding to ${this.config.host} without API Key (allowExternalWithoutApiKey=true). This exposes your accounts to the network!`
+        )
       }
     }
 
@@ -522,7 +531,7 @@ export class ProxyServer {
       const headersMs = this.config.headersTimeoutMs ?? 60_000
       this.server.keepAliveTimeout = keepAliveMs
       this.server.headersTimeout = Math.max(headersMs, keepAliveMs + 1000) // headers 必须 > keepAlive，否则 Node 会 warn
-      this.server.requestTimeout = 0  // 流式响应可能很长，禁用 request 总超时
+      this.server.requestTimeout = 0 // 流式响应可能很长，禁用 request 总超时
 
       // 启动定期清理（每 5 分钟）
       if (this.cleanupTimer) clearInterval(this.cleanupTimer)
@@ -549,7 +558,11 @@ export class ProxyServer {
       })
 
       // D4 启用 TLS 时同时监听 HTTP fallback 端口（如果配置了 fallbackPort）
-      if (this.isHttps && this.config.fallbackPort && this.config.fallbackPort !== this.config.port) {
+      if (
+        this.isHttps &&
+        this.config.fallbackPort &&
+        this.config.fallbackPort !== this.config.port
+      ) {
         const fallback = http.createServer(requestHandler)
         fallback.keepAliveTimeout = keepAliveMs
         fallback.headersTimeout = Math.max(headersMs, keepAliveMs + 1000)
@@ -558,9 +571,14 @@ export class ProxyServer {
           this.sockets.add(socket)
           socket.on('close', () => this.sockets.delete(socket))
         })
-        fallback.on('error', (err) => proxyLogger.warn('ProxyServer', `Fallback HTTP error: ${err.message}`))
+        fallback.on('error', (err) =>
+          proxyLogger.warn('ProxyServer', `Fallback HTTP error: ${err.message}`)
+        )
         fallback.listen(this.config.fallbackPort, this.config.host, () => {
-          proxyLogger.info('ProxyServer', `Fallback HTTP listening on http://${this.config.host}:${this.config.fallbackPort}`)
+          proxyLogger.info(
+            'ProxyServer',
+            `Fallback HTTP listening on http://${this.config.host}:${this.config.fallbackPort}`
+          )
         })
         this.fallbackServer = fallback
       }
@@ -590,11 +608,16 @@ export class ProxyServer {
         const { ensureProxySelfSignedCert } = require('./selfSignedCert')
         const hostnames = [this.config.host || '127.0.0.1']
         const result = ensureProxySelfSignedCert(app.getPath('userData'), hostnames)
-        proxyLogger.info('ProxyServer', `Using self-signed TLS cert (SAN=${result.altNames.join(',')}, fingerprint=${result.fingerprint.slice(0, 19)}...)`)
+        proxyLogger.info(
+          'ProxyServer',
+          `Using self-signed TLS cert (SAN=${result.altNames.join(',')}, fingerprint=${result.fingerprint.slice(0, 19)}...)`
+        )
         cert = result.cert
         key = result.key
       } catch (err) {
-        throw new Error(`TLS enabled but no certificate/key provided and auto-generation failed: ${(err as Error).message}`)
+        throw new Error(
+          `TLS enabled but no certificate/key provided and auto-generation failed: ${(err as Error).message}`
+        )
       }
     }
 
@@ -621,7 +644,11 @@ export class ProxyServer {
       const { app } = require('electron')
       const { ensureProxySelfSignedCert } = require('./selfSignedCert')
       this.appendAuditLog('regenerate_self_signed_cert', { host: this.config.host })
-      return ensureProxySelfSignedCert(app.getPath('userData'), [this.config.host || '127.0.0.1'], true)
+      return ensureProxySelfSignedCert(
+        app.getPath('userData'),
+        [this.config.host || '127.0.0.1'],
+        true
+      )
     } catch (err) {
       proxyLogger.warn('ProxyServer', `regenerateSelfSignedCert failed: ${(err as Error).message}`)
       return null
@@ -655,7 +682,10 @@ export class ProxyServer {
         this.isStopping = false
         this.activeRequests.clear()
         this.sockets.clear()
-        if (this.cleanupTimer) { clearInterval(this.cleanupTimer); this.cleanupTimer = null }
+        if (this.cleanupTimer) {
+          clearInterval(this.cleanupTimer)
+          this.cleanupTimer = null
+        }
         this.events.onStatusChange?.(false, this.config.port)
         resolve()
       }
@@ -677,12 +707,20 @@ export class ProxyServer {
   updateConfig(config: Partial<ProxyConfig>): void {
     // 标记需要重启的字段
     const restartTriggerFields: Array<keyof ProxyConfig> = ['port', 'host', 'tls', 'fallbackPort']
-    const willRestart = restartTriggerFields.some(k => k in config && JSON.stringify(this.config[k]) !== JSON.stringify(config[k]))
+    const willRestart = restartTriggerFields.some(
+      (k) => k in config && JSON.stringify(this.config[k]) !== JSON.stringify(config[k])
+    )
     if (willRestart && this.isRunning()) {
       this._needsRestart = true
-      proxyLogger.warn('ProxyServer', `Config change requires restart: ${restartTriggerFields.filter(k => k in config).join(', ')}`)
+      proxyLogger.warn(
+        'ProxyServer',
+        `Config change requires restart: ${restartTriggerFields.filter((k) => k in config).join(', ')}`
+      )
     }
-    this.appendAuditLog('config_changed', { fields: Object.keys(config), needsRestart: willRestart })
+    this.appendAuditLog('config_changed', {
+      fields: Object.keys(config),
+      needsRestart: willRestart
+    })
     this.config = { ...this.config, ...config }
     // 同步账号选择策略到 accountPool
     if (config.accountSelectionStrategy !== undefined) {
@@ -1280,9 +1318,14 @@ export class ProxyServer {
   // 获取可用账号（包含 Token 刷新检查）
   // P1-8 sessionHint：相同会话尽量复用同一账号（命中 prompt cache + 防风控）
   // P2-21 apiKeyId：用于过滤 API Key 允许使用的账号子集
-  private async getAvailableAccount(signal?: AbortSignal, sessionHint?: string, apiKeyId?: string): Promise<ProxyAccount | null> {
+  private async getAvailableAccount(
+    signal?: AbortSignal,
+    sessionHint?: string,
+    apiKeyId?: string
+  ): Promise<ProxyAccount | null> {
     const allowedIds = this.getAllowedAccountIds(apiKeyId)
-    const isAllowed = (acc: ProxyAccount | null): boolean => !acc || !allowedIds || allowedIds.has(acc.id)
+    const isAllowed = (acc: ProxyAccount | null): boolean =>
+      !acc || !allowedIds || allowedIds.has(acc.id)
     this.throwIfAborted(signal)
     // 如果 pool 为空，触发懒加载回调尝试同步账号（冷启动场景）
     if (this.accountPool.size === 0 && this.events.onPoolEmpty) {
@@ -1295,7 +1338,10 @@ export class ProxyServer {
     if (this.config.sessionAffinityEnabled && sessionHint) {
       const sticky = this.pickAccountWithAffinity(sessionHint)
       if (sticky && isAllowed(sticky)) {
-        proxyLogger.debug('ProxyServer', `Session affinity hit: ${sessionHint.slice(0, 16)} → ${sticky.email || sticky.id.slice(0, 8)}`)
+        proxyLogger.debug(
+          'ProxyServer',
+          `Session affinity hit: ${sessionHint.slice(0, 16)} → ${sticky.email || sticky.id.slice(0, 8)}`
+        )
         // 仍需检查 token 是否需要刷新
         if (this.isTokenExpiringSoon(sticky)) {
           const refreshed = await this.refreshToken(sticky, signal)
@@ -1588,7 +1634,11 @@ export class ProxyServer {
     const bb = Buffer.from(b, 'utf8')
     if (ab.length !== bb.length) {
       // 仍执行一次比较保证常数时间（用 a 自身比，结果不影响）
-      try { crypto.timingSafeEqual(ab, ab) } catch { /* ignore */ }
+      try {
+        crypto.timingSafeEqual(ab, ab)
+      } catch {
+        /* ignore */
+      }
       return false
     }
     try {
@@ -1714,8 +1764,8 @@ export class ProxyServer {
   }
 
   private ipv4ToInt(ip: string): number {
-    const parts = ip.split('.').map(p => parseInt(p, 10))
-    if (parts.length !== 4 || parts.some(p => !Number.isFinite(p) || p < 0 || p > 255)) return -1
+    const parts = ip.split('.').map((p) => parseInt(p, 10))
+    if (parts.length !== 4 || parts.some((p) => !Number.isFinite(p) || p < 0 || p > 255)) return -1
     return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0
   }
 
@@ -1997,9 +2047,16 @@ export class ProxyServer {
       }
       // P0-1 body 超限 → 413
       if (error instanceof BodyTooLargeError) {
-        proxyLogger.warn('ProxyServer', `Body too large from ${clientIP}: ${error.received}/${error.limit} bytes (${path})`)
-        this.sendError(res, 413, `Request body too large (max ${error.limit} bytes)`,
-          this.isAnthropicPath(path) ? 'anthropic' : 'openai')
+        proxyLogger.warn(
+          'ProxyServer',
+          `Body too large from ${clientIP}: ${error.received}/${error.limit} bytes (${path})`
+        )
+        this.sendError(
+          res,
+          413,
+          `Request body too large (max ${error.limit} bytes)`,
+          this.isAnthropicPath(path) ? 'anthropic' : 'openai'
+        )
         return
       }
       // P0-5 错误响应 sanitize：500 类不吐内部 message
@@ -2047,7 +2104,9 @@ export class ProxyServer {
       // 更新配置（P1-9 schema 白名单校验，防止任意字段注入）
       const body = await this.readBody(req, signal)
       let parsed: Record<string, unknown>
-      try { parsed = JSON.parse(body) } catch {
+      try {
+        parsed = JSON.parse(body)
+      } catch {
         this.sendError(res, 400, 'Invalid JSON body')
         return
       }
@@ -2055,7 +2114,13 @@ export class ProxyServer {
       this.updateConfig(safeUpdate)
       this.appendAuditLog('config_updated', { fields: Object.keys(safeUpdate) })
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ success: true, applied: Object.keys(safeUpdate), config: this.handleAdminConfigPayload() }))
+      res.end(
+        JSON.stringify({
+          success: true,
+          applied: Object.keys(safeUpdate),
+          config: this.handleAdminConfigPayload()
+        })
+      )
     } else if (path === '/admin/audit' && method === 'GET') {
       // P2-17 审计日志
       res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -2139,8 +2204,14 @@ export class ProxyServer {
     return {
       ...config,
       apiKey: maskKey(config.apiKey),
-      apiKeys: config.apiKeys?.map(k => ({ ...k, key: maskKey(k.key) || '***' })),
-      tls: config.tls ? { enabled: config.tls.enabled, hasCert: !!(config.tls.cert || config.tls.certPath), hasKey: !!(config.tls.key || config.tls.keyPath) } : undefined
+      apiKeys: config.apiKeys?.map((k) => ({ ...k, key: maskKey(k.key) || '***' })),
+      tls: config.tls
+        ? {
+            enabled: config.tls.enabled,
+            hasCert: !!(config.tls.cert || config.tls.certPath),
+            hasKey: !!(config.tls.key || config.tls.keyPath)
+          }
+        : undefined
     }
   }
 
@@ -2156,23 +2227,44 @@ export class ProxyServer {
    */
   private filterAdminConfigUpdate(input: Record<string, unknown>): Partial<ProxyConfig> {
     const allowed: Array<keyof ProxyConfig> = [
-      'enabled', 'enableMultiAccount', 'logRequests', 'logStreamEvents',
-      'maxConcurrent', 'maxRetries', 'retryDelayMs', 'preferredEndpoint',
-      'tokenRefreshBeforeExpiry', 'autoStart', 'clientDrivenToolExecution',
-      'disableTools', 'payloadSizeLimitKB', 'enableTokenBufferReserve',
-      'tokenBufferReserve', 'autoSwitchOnQuotaExhausted', 'accountSelectionStrategy',
-      'multiAccountSelectionMode', 'multiAccountGroupIds', 'modelMappings',
-      'maxRequestBodyBytes', 'allowedIPs', 'deniedIPs',
-      'rateLimitPerKeyPerMinute', 'sessionAffinityEnabled',
-      'keepAliveTimeoutMs', 'headersTimeoutMs', 'recentRequestsLimit',
-      'enableMetrics', 'apiKeyGroupBindings', 'enableAuditLog'
+      'enabled',
+      'enableMultiAccount',
+      'logRequests',
+      'logStreamEvents',
+      'maxConcurrent',
+      'maxRetries',
+      'retryDelayMs',
+      'preferredEndpoint',
+      'tokenRefreshBeforeExpiry',
+      'autoStart',
+      'clientDrivenToolExecution',
+      'disableTools',
+      'payloadSizeLimitKB',
+      'enableTokenBufferReserve',
+      'tokenBufferReserve',
+      'autoSwitchOnQuotaExhausted',
+      'accountSelectionStrategy',
+      'multiAccountSelectionMode',
+      'multiAccountGroupIds',
+      'modelMappings',
+      'maxRequestBodyBytes',
+      'allowedIPs',
+      'deniedIPs',
+      'rateLimitPerKeyPerMinute',
+      'sessionAffinityEnabled',
+      'keepAliveTimeoutMs',
+      'headersTimeoutMs',
+      'recentRequestsLimit',
+      'enableMetrics',
+      'apiKeyGroupBindings',
+      'enableAuditLog'
       // 故意排除：port / host / apiKey / apiKeys / tls / fallbackPort / allowExternalWithoutApiKey
       // 这些字段会改变监听行为或安全策略，必须本地 IPC 改
     ]
     const out: Partial<ProxyConfig> = {}
     for (const key of allowed) {
       if (key in input) {
-        (out as Record<string, unknown>)[key] = input[key as string]
+        ;(out as Record<string, unknown>)[key] = input[key as string]
       }
     }
     return out
@@ -4474,7 +4566,16 @@ export class ProxyServer {
         req.off('aborted', onAborted)
         signal?.removeEventListener('abort', onAbort)
       }
-      const onData = (chunk: Buffer) => (body += chunk)
+      const onData = (chunk: Buffer): void => {
+        total += chunk.length
+        if (total > maxBytes) {
+          cleanup()
+          reject(new BodyTooLargeError(total, maxBytes))
+          req.destroy()
+          return
+        }
+        chunks.push(chunk)
+      }
       const onEnd = () => {
         cleanup()
         resolve(Buffer.concat(chunks, total).toString('utf8'))
@@ -4512,9 +4613,10 @@ export class ProxyServer {
   ): void {
     if (res.writableEnded || res.destroyed) return
     // 500-599 强制使用通用消息（防止泄露内部信息）
-    const safeMessage = status >= 500 && status < 600
-      ? this.sanitizeErrorMessage(message) || 'Internal server error'
-      : message
+    const safeMessage =
+      status >= 500 && status < 600
+        ? this.sanitizeErrorMessage(message) || 'Internal server error'
+        : message
     // P1-6 503 → 触发 webhook（已有 5 分钟去重）
     if (status === 503) {
       this.notifyAllAccountsExhausted('unknown')
@@ -4541,18 +4643,23 @@ export class ProxyServer {
    */
   private sanitizeErrorMessage(msg: string): string {
     if (!msg) return ''
-    return msg
-      // Bearer xxxx → Bearer ***
-      .replace(/Bearer\s+[A-Za-z0-9\-_.~+/]+=*/gi, 'Bearer ***')
-      // access_token / refresh_token / api_key / x-api-key 字段值
-      .replace(/(access[_-]?token|refresh[_-]?token|api[_-]?key|x-api-key)["'\s:=]+[^"',\s}]+/gi, '$1=***')
-      // 长 base64/JWT（>= 40 chars）替换为占位
-      .replace(/eyJ[A-Za-z0-9\-_]{20,}/g, 'eyJ***')
-      // Windows 用户路径
-      .replace(/C:\\Users\\[^\\/\s]+/gi, 'C:\\Users\\***')
-      // Linux/Mac home 路径
-      .replace(/\/home\/[^\s/]+/g, '/home/***')
-      .replace(/\/Users\/[^\s/]+/g, '/Users/***')
+    return (
+      msg
+        // Bearer xxxx → Bearer ***
+        .replace(/Bearer\s+[A-Za-z0-9\-_.~+/]+=*/gi, 'Bearer ***')
+        // access_token / refresh_token / api_key / x-api-key 字段值
+        .replace(
+          /(access[_-]?token|refresh[_-]?token|api[_-]?key|x-api-key)["'\s:=]+[^"',\s}]+/gi,
+          '$1=***'
+        )
+        // 长 base64/JWT（>= 40 chars）替换为占位
+        .replace(/eyJ[A-Za-z0-9\-_]{20,}/g, 'eyJ***')
+        // Windows 用户路径
+        .replace(/C:\\Users\\[^\\/\s]+/gi, 'C:\\Users\\***')
+        // Linux/Mac home 路径
+        .replace(/\/home\/[^\s/]+/g, '/home/***')
+        .replace(/\/Users\/[^\s/]+/g, '/Users/***')
+    )
   }
 
   /**
@@ -4643,9 +4750,11 @@ export class ProxyServer {
   private triggerWebhook(event: string, payload: Record<string, unknown>): void {
     const now = Date.now()
     const last = this.lastWebhookByEvent.get(event) || 0
-    if (now - last < 5 * 60_000) return  // 同事件 5 分钟内不重复推
+    if (now - last < 5 * 60_000) return // 同事件 5 分钟内不重复推
     this.lastWebhookByEvent.set(event, now)
-    try { this.webhookTrigger?.(event, payload) } catch (err) {
+    try {
+      this.webhookTrigger?.(event, payload)
+    } catch (err) {
       proxyLogger.warn('ProxyServer', `Webhook trigger failed: ${(err as Error).message}`)
     }
   }
@@ -4658,7 +4767,14 @@ export class ProxyServer {
       title: '反代账号全部不可用',
       message: `所有账号配额耗尽或冷却中（exhausted=${quota.exhausted}/${quota.total}，cooldown=${quota.cooldown}）`,
       level: 'error',
-      fields: { 端点: path, 模型: model || '-', 总账号: quota.total, 配额耗尽: quota.exhausted, 冷却中: quota.cooldown, 可用: quota.available }
+      fields: {
+        端点: path,
+        模型: model || '-',
+        总账号: quota.total,
+        配额耗尽: quota.exhausted,
+        冷却中: quota.cooldown,
+        可用: quota.available
+      }
     })
   }
 

@@ -384,7 +384,8 @@ interface AutoReplacementConfig extends BrowserRegistrationConfig {
 let autoReplacementRunning = false
 let scheduledRegistrationTimer: ReturnType<typeof setTimeout> | null = null
 
-const COLAB_PROXY_TIMEOUT_MS = 60_000
+// A fresh Colab runtime reset includes deliberate waits and can take more than one minute.
+const COLAB_PROXY_TIMEOUT_MS = 180_000
 
 async function generateColabProxyWithTimeout(config: GenerateColabProxyConfig): Promise<string> {
   let timeout: ReturnType<typeof setTimeout> | undefined
@@ -552,10 +553,10 @@ async function runBrowserReplacementRegistration(
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error)
         mainWindow?.webContents.send('registration-log', {
-          message: `[AutoReplace] Proxy generation failed: ${errorMsg}. Continuing without proxy...`,
+          message: `[AutoReplace] Proxy generation failed: ${errorMsg}. Registration aborted.`,
           taskId: browserConfig.taskId
         })
-        browserConfig.proxyUrl = undefined
+        throw error
       }
     }
     mainWindow?.webContents.send('registration-log', {

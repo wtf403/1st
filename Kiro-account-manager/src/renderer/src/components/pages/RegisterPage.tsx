@@ -982,12 +982,12 @@ export function RegisterPage(): React.JSX.Element {
         formUrl: proxyFormUrl.trim() || undefined
       })
       if (!proxyRes.success || !proxyRes.proxyUrl) {
-        addLog(
+        const message =
           scope === 'batch'
-            ? `${isEn ? 'Shared proxy generation failed; batch will continue without proxy' : '共享代理生成失败，批量将不使用代理继续'}: ${proxyRes.error || 'Proxy generation failed'}`
-            : `${isEn ? 'Proxy generation failed, continuing without proxy' : '代理生成失败，将不使用代理继续'}: ${proxyRes.error || 'Proxy generation failed'}`
-        )
-        return undefined
+            ? `${isEn ? 'Shared proxy generation failed; batch aborted' : '共享代理生成失败，批量已中止'}: ${proxyRes.error || 'Proxy generation failed'}`
+            : `${isEn ? 'Proxy generation failed; registration aborted' : '代理生成失败，注册已中止'}: ${proxyRes.error || 'Proxy generation failed'}`
+        addLog(message)
+        throw new Error(message)
       }
       setProxyUrl(proxyRes.proxyUrl)
       addLog(
@@ -1660,8 +1660,8 @@ export function RegisterPage(): React.JSX.Element {
 
               <p className="text-xs text-muted-foreground">
                 {isEn
-                  ? 'Start Chrome with --remote-debugging-port=9229 and keep the Colab notebook signed in.'
-                  : '用 --remote-debugging-port=9229 启动 Chrome，并保持 Colab 笔记本已登录。'}
+                  ? 'Kiro uses port 9222 for the app debugger. When needed, it launches Chromium for proxy generation on port 9229 with --remote-debugging-address=127.0.0.1 --user-data-dir=/tmp/chrome-debug-profile.'
+                  : 'Kiro 应用调试端口使用 9222。需要时会在 9229 端口启动用于代理生成的 Chromium，并使用 --remote-debugging-address=127.0.0.1 --user-data-dir=/tmp/chrome-debug-profile。'}
               </p>
             </div>
           )}

@@ -47,10 +47,21 @@ function sleep(ms: number): Promise<void> {
 }
 
 function normalizeCdpAddress(address?: string): string {
-  const trimmed = address?.trim() || '127.0.0.1:9229'
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://'))
-    return trimmed.replace(/\/$/, '')
-  return `http://${trimmed.replace(/\/$/, '')}`
+  const raw = address?.trim() || '127.0.0.1:9229'
+  const withProtocol =
+    raw.startsWith('http://') || raw.startsWith('https://') ? raw : `http://${raw}`
+  try {
+    const url = new URL(withProtocol.replace(/\/$/, ''))
+    // 0.0.0.0 is a bind/listen address, not a reliable client destination. If it is persisted
+    // from old settings, connect to the local dedicated Chromium process instead.
+    if (url.hostname === '0.0.0.0') url.hostname = '127.0.0.1'
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return `http://${raw
+      .replace(/^https?:\/\//, '')
+      .replace(/^0\.0\.0\.0(?=:|$)/, '127.0.0.1')
+      .replace(/\/$/, '')}`
+  }
 }
 
 function getCdpPort(cdpBase: string): number | undefined {
@@ -135,13 +146,13 @@ function getChromeCandidates(): string[] {
     ]
   }
   return [
+    'chromium',
+    '/usr/bin/chromium',
+    'chromium-browser',
+    '/usr/bin/chromium-browser',
+    '/snap/bin/chromium',
     'google-chrome',
     'google-chrome-stable',
-    'chromium',
-    'chromium-browser',
-    '/snap/bin/chromium',
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
     'microsoft-edge'
   ]
 }
@@ -174,7 +185,7 @@ function spawnBrowser(candidate: string, args: string[], env: NodeJS.ProcessEnv)
   })
 }
 
-async function launchDefaultChromeProfile(cdpBase: string, notebookUrl: string): Promise<void> {
+async function launchDefaultChromeProfile(cdpBase: string): Promise<void> {
   const port = getCdpPort(cdpBase) || 9229
   const candidates = getChromeCandidates()
   const errors: string[] = []
@@ -197,16 +208,23 @@ async function launchDefaultChromeProfile(cdpBase: string, notebookUrl: string):
 
     const userDataDir = getDefaultChromeUserDataDir(candidate)
     const args = [
+      '--remote-debugging-address=127.0.0.1',
       `--remote-debugging-port=${port}`,
-      '--profile-directory=Default',
       '--no-first-run',
-      '--no-default-browser-check',
-      notebookUrl
+      '--no-default-browser-check'
     ]
-    if (process.platform === 'linux') args.unshift('--no-sandbox')
-    if (userDataDir && existsSync(userDataDir)) args.unshift(`--user-data-dir=${userDataDir}`)
+    if (process.platform === 'linux') {
+      // Use a dedicated profile so Chromium starts as a separate CDP-controlled process instead
+      // of handing the notebook URL to an already-running browser instance.
+      args.push('--user-data-dir=/tmp/chrome-debug-profile')
+      args.push('--no-sandbox')
+    } else {
+      args.push('--profile-directory=Default')
+      if (userDataDir && existsSync(userDataDir)) args.push(`--user-data-dir=${userDataDir}`)
+    }
 
     try {
+      logColab(`Starting Chromium command: ${candidate} ${args.join(' ')}`)
       await spawnBrowser(candidate, args, env)
       await sleep(5500)
       return
@@ -280,7 +298,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     res = await fetch(url, init)
   } catch (error) {
     throw new Error(
-      `Cannot connect to Chrome CDP at ${url}. Start Chrome/Chromium with --remote-debugging-port=9229 and keep the default profile signed in to Colab. ${error instanceof Error ? error.message : String(error)}`
+      `Cannot connect to Chrome CDP at ${url}. Start Chromium with --remote-debugging-address=127.0.0.1 --remote-debugging-port=9229 --user-data-dir=/tmp/chrome-debug-profile and keep the profile signed in to Colab. ${error instanceof Error ? error.message : String(error)}`
     )
   }
   if (!res.ok) throw new Error(`CDP HTTP ${res.status}: ${await res.text()}`)
@@ -351,46 +369,82 @@ class CdpSession {
   }
 }
 
-async function findOrOpenColabTarget(cdpBase: string, notebookUrl: string): Promise<CdpTarget> {
-  logColab(`Looking for Chrome CDP target at ${cdpBase}`)
-  let targets: CdpTarget[]
-  let initialError = ''
+let chromiumLaunchPromise: Promise<void> | undefined
+
+function isColabTarget(item: CdpTarget): boolean {
+  if (item.type !== 'page' || !item.url) return false
   try {
-    targets = await fetchJson<CdpTarget[]>(`${cdpBase}/json/list`)
-    logColab(`✓ Connected to CDP; found ${targets.length} target(s)`)
-  } catch (error) {
-    initialError = error instanceof Error ? error.message : String(error)
-    logColab(`⚠️ CDP is not ready, launching Chrome/Chromium: ${initialError}`)
+    const hostname = new URL(item.url).hostname.toLowerCase()
+    return hostname === 'colab.research.google.com' || hostname === 'colab.google.com'
+  } catch {
+    return item.url.includes('colab.research.google.com') || item.url.includes('colab.google.com')
+  }
+}
+
+async function getOrLaunchChromiumTargets(cdpBase: string): Promise<CdpTarget[]> {
+  try {
+    const targets = await fetchJson<CdpTarget[]>(`${cdpBase}/json/list`)
+    logColab(`✓ Reusing running Chromium CDP session; found ${targets.length} target(s)`)
+    return targets
+  } catch {
+    // Multiple registrations can request a proxy at nearly the same moment. Ensure they share
+    // one launch attempt instead of each spawning a separate Chromium process/window.
+    if (!chromiumLaunchPromise) {
+      logColab(`Launching dedicated Chromium profile for proxy generation at ${cdpBase}`)
+      chromiumLaunchPromise = (async () => {
+        await launchDefaultChromeProfile(cdpBase)
+        await waitForCdp(cdpBase)
+      })().finally(() => {
+        chromiumLaunchPromise = undefined
+      })
+    } else {
+      logColab('Chromium launch already in progress; waiting for the existing launch attempt...')
+    }
     try {
-      await launchDefaultChromeProfile(cdpBase, notebookUrl)
-      await waitForCdp(cdpBase)
-      targets = await fetchJson<CdpTarget[]>(`${cdpBase}/json/list`)
-      logColab(`✓ Chrome launched; found ${targets.length} target(s)`)
-    } catch (launchError) {
-      const launchMessage = launchError instanceof Error ? launchError.message : String(launchError)
-      throw new Error(`${launchMessage}. Initial CDP error: ${initialError}`)
+      await chromiumLaunchPromise
+      const targets = await fetchJson<CdpTarget[]>(`${cdpBase}/json/list`)
+      logColab(`✓ Connected to newly launched Chromium CDP; found ${targets.length} target(s)`)
+      return targets
+    } catch (error) {
+      throw new Error(
+        `Dedicated Chromium CDP did not become ready at ${cdpBase}: ${error instanceof Error ? error.message : String(error)}`
+      )
     }
   }
-  let target = targets.find(
-    (item) => item.type === 'page' && item.url?.includes('colab.research.google.com')
-  )
+}
+
+async function findOrOpenColabTarget(cdpBase: string, notebookUrl: string): Promise<CdpTarget> {
+  // Reuse an existing CDP-controlled Chromium and its Colab tab whenever possible. Only launch
+  // Chromium if port 9229 does not already expose a healthy CDP endpoint.
+  let targets = await getOrLaunchChromiumTargets(cdpBase)
+  let target = targets.find(isColabTarget)
   if (target) {
     logColab(`✓ Reusing Colab tab: ${target.title || target.url || target.id}`)
     return target
   }
 
-  logColab(`Opening Colab notebook: ${notebookUrl}`)
-  const encodedUrl = encodeURIComponent(notebookUrl)
-  try {
+  target = targets.find((item) => item.type === 'page' && item.webSocketDebuggerUrl)
+  if (target) {
+    logColab(`Navigating existing Chromium page to Colab notebook: ${notebookUrl}`)
+    const session = new CdpSession(target.webSocketDebuggerUrl!)
+    try {
+      await session.connect()
+      await session.send('Page.enable')
+      await session.send('Page.navigate', { url: notebookUrl })
+    } finally {
+      session.close()
+    }
+  } else {
+    logColab(`Opening Colab notebook: ${notebookUrl}`)
+    const encodedUrl = encodeURIComponent(notebookUrl)
     target = await fetchJson<CdpTarget>(`${cdpBase}/json/new?${encodedUrl}`, { method: 'PUT' })
-  } catch {
-    target = await fetchJson<CdpTarget>(`${cdpBase}/json/new?${encodedUrl}`)
   }
 
   logColab('Waiting 5 seconds for tab to initialize...')
   await sleep(5000)
   targets = await fetchJson<CdpTarget[]>(`${cdpBase}/json/list`)
-  const openedTarget = targets.find((item) => item.id === target?.id) || target
+  const openedTarget =
+    targets.find(isColabTarget) || targets.find((item) => item.id === target?.id) || target
   logColab(`✓ Opened Colab target: ${openedTarget.title || openedTarget.url || openedTarget.id}`)
   return openedTarget
 }
@@ -666,7 +720,10 @@ async function runCellAndExtractProxy(
   signal?: AbortSignal
 ): Promise<string> {
   logColab(`Step 6.1: Waiting for proxy output in cell: ${cellSelector}`)
-  logColab('Will check every second; caller enforces a 60 second overall timeout...')
+  logColab('Waiting 15 seconds for the freshly started Colab job before reading its output...')
+  await sleep(15000)
+  throwIfAborted(signal)
+  logColab('Will check every second; caller enforces a 180 second overall timeout...')
 
   for (let attempt = 1; attempt <= 120; attempt++) {
     throwIfAborted(signal)
@@ -674,8 +731,8 @@ async function runCellAndExtractProxy(
     throwIfAborted(signal)
     const result = await session.evaluate<{ found: boolean; proxy?: string; debug?: string }>(`
       (() => {
-        const cell = document.querySelector(${JSON.stringify(cellSelector)});
-        if (!cell) return { found: false, debug: 'Cell not found' };
+        const configuredCell = document.querySelector(${JSON.stringify(cellSelector)});
+        const cell = configuredCell || document.querySelector('colab-code-cell') || document;
         const selectors = ['.output-area', '.output_subarea', '.output_text', 'colab-output-area', '[data-mime-type]', 'pre'];
         let allText = '';
         for (const selector of selectors) {
@@ -691,13 +748,22 @@ async function runCellAndExtractProxy(
           const match = allText.match(pattern);
           if (match) return { found: true, proxy: match[0] };
         }
-        return { found: false, debug: allText.substring(0, 200) };
+        return { found: false, debug: (configuredCell ? '' : 'Configured cell not found; using fallback. ') + allText.substring(0, 200) };
       })()
     `)
     if (result.found && result.proxy) {
-      const proxy = result.proxy
-        .replace(/^socks5:\/\//, 'socks5://')
-        .replace(/^socks5:/, 'socks5://')
+      const proxy = result.proxy.replace(/^socks5:\/*/, 'socks5://')
+      try {
+        const parsed = new URL(proxy)
+        if (parsed.protocol !== 'socks5:' || !parsed.hostname || !parsed.port) {
+          throw new Error('missing SOCKS5 host or port')
+        }
+      } catch (error) {
+        logColab(
+          `⚠️ Ignoring malformed proxy output on attempt ${attempt}: ${result.proxy} (${error instanceof Error ? error.message : String(error)})`
+        )
+        continue
+      }
       logColab(`✓ Proxy extracted on attempt ${attempt}: ${proxy}`)
       return proxy
     }

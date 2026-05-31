@@ -16,7 +16,7 @@ function getRegistrationProxyUrl(): string | undefined {
 async function proxyFetch(url: string, options?: RequestInit): Promise<Response> {
   const proxyUrl = getRegistrationProxyUrl()
   if (proxyUrl) {
-    const agent = new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: false } })
+    const agent = safeCreateProxyAgent(proxyUrl)
     return (await undiciFetch(url, {
       ...options,
       dispatcher: agent

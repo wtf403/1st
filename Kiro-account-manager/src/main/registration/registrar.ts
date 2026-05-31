@@ -149,9 +149,8 @@ export class Registrar {
    *   4. GitHub 下载到 userData（最后兜底，仅首次）
    */
   private async initTlsClient(): Promise<void> {
-    // 确保 tls-client 共享库在临时目录可用（打包后 resources/ 有预置 dll）
-    this.ensureTlsLibInTmpDir()
-    // 不传 customLibraryPath，让 tlsclientwrapper 自动从 tmpdir 找 dll
+    // 确保 tls-client 共享库可用（优先复用 userData，找不到则由 wrapper 下载）
+    this.ensureTlsLib()
     this.moduleClient = new ModuleClient()
     await this.moduleClient.open()
     this.log(
@@ -190,7 +189,11 @@ export class Registrar {
     const finalPath = path.join(tlsClientDir, filename)
 
     // 确保目录存在
-    try { fs.mkdirSync(tlsClientDir, { recursive: true }) } catch { /* ignore */ }
+    try {
+      fs.mkdirSync(tlsClientDir, { recursive: true })
+    } catch {
+      /* ignore */
+    }
 
     // 已存在 → 直接复用
     if (fs.existsSync(finalPath)) {
@@ -201,7 +204,12 @@ export class Registrar {
     // 2. 从打包资源复制（安装包自带）
     const resourcePath = path.join(process.resourcesPath || '', filename)
     if (fs.existsSync(resourcePath)) {
-      this.log('[TLS] Copying library from resources to userData (one-time): ' + resourcePath + ' -> ' + finalPath)
+      this.log(
+        '[TLS] Copying library from resources to userData (one-time): ' +
+          resourcePath +
+          ' -> ' +
+          finalPath
+      )
       try {
         fs.copyFileSync(resourcePath, finalPath)
         return { existingPath: finalPath, downloadDir: tlsClientDir }
@@ -212,6 +220,7 @@ export class Registrar {
     this.log(
       '[TLS] Library not found in resources, will download from GitHub. Searched: ' + resourcePath
     )
+    return { downloadDir: tlsClientDir }
   }
 
   private async rebuildTlsClient(): Promise<void> {
@@ -247,7 +256,7 @@ export class Registrar {
       getSystemProxy() ||
       undefined
     if (proxyUrl) {
-      const agent = new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: false } })
+      const agent = safeCreateProxyAgent(proxyUrl)
       const resp = await undiciFetch(url, { ...(init as UndiciRequestInit), dispatcher: agent })
       return resp as unknown as Response
     }
@@ -432,7 +441,7 @@ export class Registrar {
 
   private parseBody(body: string): Record<string, unknown> {
     try {
-      return JSON.parse(body)
+      return JSON.parse(this.decodeBody(body))
     } catch {
       return {}
     }
@@ -449,7 +458,8 @@ export class Registrar {
     if (body.includes('请稍后再试') && body.includes('管理员')) return 'AWS-RISK-CONTROL'
     if (body.includes('发生意外错误')) return 'AWS-RISK-CONTROL'
     // 英文消息
-    if (lower.includes('try again later') && lower.includes('administrator')) return 'AWS-RISK-CONTROL'
+    if (lower.includes('try again later') && lower.includes('administrator'))
+      return 'AWS-RISK-CONTROL'
     if (lower.includes('unexpected error') && lower.includes('contact')) return 'AWS-RISK-CONTROL'
     return null
   }
@@ -627,9 +637,8 @@ export class Registrar {
       if (accounts.length === 0) throw new Error('无可用的 Outlook 账号')
       // 单行 → 直接用（批量并发时前端已为每个 task 切一行，避免并发抢占）
       // 多行（单次注册）→ 随机挑一行
-      const acc = accounts.length === 1
-        ? accounts[0]
-        : accounts[Math.floor(Math.random() * accounts.length)]
+      const acc =
+        accounts.length === 1 ? accounts[0] : accounts[Math.floor(Math.random() * accounts.length)]
       this.email = acc.email
       this.log(`email=${this.email}`)
       return
@@ -1116,7 +1125,8 @@ export class Registrar {
       'encryptionContextResponse'
     )
     const pubKeyMap = encCtx ? getNestedStringMap(encCtx, 'publicKey') : null
-    if (!pubKeyMap?.n) throw new Error(`未获取到加密公钥: ${this.formatErrorBody(resp.body, resp.status)}`)
+    if (!pubKeyMap?.n)
+      throw new Error(`未获取到加密公钥: ${this.formatErrorBody(resp.body, resp.status)}`)
 
     const issuer = (encCtx?.issuer as string) || 'signin'
     const audience = (encCtx?.audience as string) || 'AWSPasswordService'
@@ -1194,7 +1204,10 @@ export class Registrar {
     )
     saveCookies(this.cookies, resp.headers as Record<string, string | string[] | undefined>)
     const data = this.parseBody(resp.body)
-    if (data.stepId !== 'end-of-workflow-success') throw new Error(`完成工作流失败: ${data.stepId || 'undefined'} ${this.formatErrorBody(resp.body, resp.status)}`)
+    if (data.stepId !== 'end-of-workflow-success')
+      throw new Error(
+        `完成工作流失败: ${data.stepId || 'undefined'} ${this.formatErrorBody(resp.body, resp.status)}`
+      )
 
     const redir = data.redirect as Record<string, unknown> | undefined
     const rurl = redir?.url as string
@@ -1546,14 +1559,19 @@ export class Registrar {
    * 用于在指纹摘要里准确显示是直连还是走代理。
    */
   private resolvedProxyUrl(): string | undefined {
-    return (this.cfg.proxy && this.cfg.proxy.trim())
-      || process.env.HTTPS_PROXY || process.env.https_proxy
-      || process.env.HTTP_PROXY || process.env.http_proxy
-      || getSystemProxy() || undefined
+    return (
+      (this.cfg.proxy && this.cfg.proxy.trim()) ||
+      process.env.HTTPS_PROXY ||
+      process.env.https_proxy ||
+      process.env.HTTP_PROXY ||
+      process.env.http_proxy ||
+      getSystemProxy() ||
+      undefined
+    )
   }
 
   /** 输出本次注册使用的指纹摘要（用于审计与后续复用） */
-  private fingerprintSnapshot(): FingerprintSnapshot {
+  fingerprintSnapshot(): FingerprintSnapshot {
     const resolved = this.resolvedProxyUrl()
     return {
       chromeVer: this.identity.chromeVer,

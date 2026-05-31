@@ -53,7 +53,7 @@ const getSubscriptionColor = (type: string, title?: string): string => {
 }
 
 export function HomePage() {
-  const { accounts, activeAccountId, getStats, darkMode, usagePrecision } = useAccountsStore()
+  const { accounts, getStats, darkMode, usagePrecision } = useAccountsStore()
   const { t } = useTranslation()
   const stats = getStats()
   const [proxyStats, setProxyStats] = useState<ProxyUsageStats | null>(null)

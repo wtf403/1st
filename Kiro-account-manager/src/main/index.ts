@@ -973,13 +973,17 @@ async function refreshOidcToken(
   }
 
   try {
-    const response = await fetchWithAppProxy(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
+    const response = await fetchWithAppProxy(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
       },
-      body: JSON.stringify(payload)
-    })
+      proxyUrl
+    )
 
     if (!response.ok) {
       const errorText = await response.text()
@@ -1003,21 +1007,28 @@ async function refreshOidcToken(
 }
 
 // 社交登录 (GitHub/Google) 的 Token 刷新
-async function refreshSocialToken(refreshToken: string): Promise<OidcRefreshResult> {
+async function refreshSocialToken(
+  refreshToken: string,
+  proxyUrl?: string
+): Promise<OidcRefreshResult> {
   console.log(`[Social] Refreshing token...`)
 
   const url = `${KIRO_AUTH_ENDPOINT}/refreshToken`
   const machineId = getCurrentMachineId()
 
   try {
-    const response = await fetchWithAppProxy(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': getKiroUserAgent(machineId)
+    const response = await fetchWithAppProxy(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': getKiroUserAgent(machineId)
+        },
+        body: JSON.stringify({ refreshToken })
       },
-      body: JSON.stringify({ refreshToken })
-    })
+      proxyUrl
+    )
 
     if (!response.ok) {
       const errorText = await response.text()
@@ -1812,18 +1823,33 @@ let pendingBackupTimer: ReturnType<typeof setTimeout> | null = null
  * - 节流窗口结束后，自动 flush 最新一份数据
  * - 退出前可手动调用 flushBackupNow() 强制写盘
  */
-async function createBackup(data: unknown): Promise<void> {
-  if (!store) return
-
+async function writeBackupNow(): Promise<void> {
+  if (!store || pendingBackupData == null) return
+  const data = pendingBackupData
+  pendingBackupData = null
   try {
     const fs = await import('fs/promises')
     const path = await import('path')
     const backupPath = path.join(path.dirname(store.path), 'kiro-accounts.backup.json')
-
     await fs.writeFile(backupPath, JSON.stringify(data, null, 2), 'utf-8')
+    lastBackupTime = Date.now()
     console.log('[Backup] Data backup created')
   } catch (error) {
     console.error('[Backup] Failed to create backup:', error)
+  }
+}
+
+async function createBackup(data: unknown): Promise<void> {
+  if (!store) return
+  pendingBackupData = data
+  const delay = BACKUP_THROTTLE_MS - (Date.now() - lastBackupTime)
+  if (delay <= 0) {
+    await writeBackupNow()
+  } else if (!pendingBackupTimer) {
+    pendingBackupTimer = setTimeout(() => {
+      pendingBackupTimer = null
+      void writeBackupNow()
+    }, delay)
   }
 }
 
@@ -3299,8 +3325,11 @@ app.whenReady().then(async () => {
         return { success: false, error: { message: '缺少 accessToken' } }
       }
 
-      // 获取账户绑定的设备 ID
+      // 获取账户绑定的设备 ID 和出口代理
       const accountMachineId = account?.machineId as string | undefined
+      const boundProxyUrl = proxyServer
+        ? proxyServer.getAccountPool().getAccount(account.id || '')?.proxyUrl
+        : undefined
 
       // 第一次尝试：使用当前 accessToken
       try {

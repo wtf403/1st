@@ -157,7 +157,14 @@ function App(): React.JSX.Element {
 
   // 账户/激活变化时触发托盘更新（内部防抖 + 直接从 store 读取最新数据，避免 stale closure）
   useEffect(() => {
-    updateTrayInfo()
+    if (trayDebounceRef.current) clearTimeout(trayDebounceRef.current)
+    trayDebounceRef.current = setTimeout(() => {
+      trayDebounceRef.current = null
+      updateTrayInfo()
+    }, TRAY_UPDATE_DEBOUNCE_MS)
+    return () => {
+      if (trayDebounceRef.current) clearTimeout(trayDebounceRef.current)
+    }
   }, [accounts, activeAccountId, updateTrayInfo])
 
   // 监听托盘刷新账户事件

@@ -692,6 +692,38 @@ interface KiroApi {
     }>
   }) => Promise<{ success: boolean; config?: unknown; error?: string }>
 
+  // v1.8 反代安全 / 可观测 API
+  proxySelfSignedCertInfo: () => Promise<{
+    success: boolean
+    cert?: string
+    key?: string
+    fingerprint?: string
+    notBefore?: number
+    notAfter?: number
+    subject?: string
+    altNames?: string[]
+    error?: string
+  }>
+  proxySelfSignedCertRegenerate: () => Promise<{
+    success: boolean
+    cert?: string
+    key?: string
+    fingerprint?: string
+    notBefore?: number
+    notAfter?: number
+    subject?: string
+    altNames?: string[]
+    error?: string
+  }>
+  proxyNeedsRestart: () => Promise<{ needsRestart: boolean }>
+  proxyRestart: () => Promise<{ success: boolean; error?: string }>
+  proxyAuditLog: () => Promise<{
+    entries: Array<{ ts: number; type: string; data: Record<string, unknown> }>
+  }>
+  onProxyWebhookTrigger: (
+    callback: (event: string, payload: Record<string, unknown>) => void
+  ) => () => void
+
   // 添加账号到反代池
   proxyAddAccount: (account: {
     id: string
@@ -868,6 +900,42 @@ interface KiroApi {
   proxyLoadLogs: () => Promise<{
     success: boolean
     logs: Array<{ time: string; path: string; status: number; tokens?: number }>
+  }>
+
+  // 代理池与诊断
+  proxyPoolValidate: (params: {
+    url: string
+    testUrl?: string
+    timeoutMs?: number
+  }) => Promise<{ success: boolean; latencyMs?: number; externalIp?: string; error?: string }>
+  diagnoseHttpProbe: (params: {
+    url: string
+    method?: 'GET' | 'HEAD'
+    timeoutMs?: number
+  }) => Promise<{ success: boolean; latencyMs?: number; status?: number; error?: string }>
+  accountSetProxyBinding: (
+    accountId: string,
+    proxyUrl: string | undefined
+  ) => Promise<{ success: boolean }>
+  diagnoseRun: (params: {
+    proxyUrl?: string
+    targets: Array<{
+      id: string
+      label: string
+      url: string
+      timeoutMs?: number
+      expectStatus?: number[]
+    }>
+  }) => Promise<{
+    results: Array<{
+      id: string
+      label: string
+      url: string
+      success: boolean
+      httpStatus?: number
+      latencyMs?: number
+      error?: string
+    }>
   }>
 
   // 清除账号 suspended 状态

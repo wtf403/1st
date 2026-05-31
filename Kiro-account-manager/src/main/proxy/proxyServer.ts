@@ -697,7 +697,10 @@ export class ProxyServer {
       this.activeRequests.forEach((controller) =>
         controller.abort(new Error('Proxy server stopped'))
       )
-      this.sockets.forEach((socket) => socket.destroy())
+      setTimeout(() => {
+        this.sockets.forEach((socket) => socket.destroy())
+        finish()
+      }, gracefulMs)
     })
   }
 
@@ -1683,7 +1686,7 @@ export class ProxyServer {
         if (matchedKey.creditsLimit && matchedKey.usage.totalCredits >= matchedKey.creditsLimit) {
           return { valid: false, reason: 'Credits limit exceeded' }
         }
-        return { valid: true, apiKey: matched }
+        return { valid: true, apiKey: matchedKey }
       }
     }
 
@@ -4666,7 +4669,7 @@ export class ProxyServer {
    * P1-7 滑动窗口限流：每分钟 N 次（按 API Key id 或 IP）
    * 0 = 不限制
    */
-  private checkRateLimit(id: string): { allowed: boolean; retryAfterMs: number } {
+  checkRateLimit(id: string): { allowed: boolean; retryAfterMs: number } {
     const limit = this.config.rateLimitPerKeyPerMinute || 0
     if (limit <= 0) return { allowed: true, retryAfterMs: 0 }
 
@@ -4710,7 +4713,7 @@ export class ProxyServer {
     if (entry) {
       const account = this.accountPool.getAccount(entry.accountId)
       // 校验账号仍可用且未被封禁
-      if (account && !this.accountPool.isSuspended(account) && account.isAvailable !== false) {
+      if (account && !this.accountPool.isSuspended(account.id) && account.isAvailable !== false) {
         entry.lastAt = Date.now()
         return account
       }
